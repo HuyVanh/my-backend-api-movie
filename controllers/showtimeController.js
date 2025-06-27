@@ -128,3 +128,134 @@ exports.deleteShowtime = async (req, res) => {
     });
   }
 };
+
+// @desc    Tạo thời gian chiếu tự động cho nhiều ngày
+// @route   POST /api/showtimes/generate
+// @access  Private (Admin)
+exports.generateShowtimes = async (req, res) => {
+  try {
+    const { startDate, endDate, times, excludeDates = [] } = req.body;
+
+    // Validate input
+    if (!startDate || !endDate || !times || !Array.isArray(times)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vui lòng cung cấp startDate, endDate và times'
+      });
+    }
+
+    if (times.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Danh sách thời gian không được rỗng'
+      });
+    }
+
+    const showtimes = [];
+    let currentDate = new Date(startDate);
+    const end = new Date(endDate);
+
+    // Validate dates
+    if (currentDate > end) {
+      return res.status(400).json({
+        success: false,
+        error: 'Ngày bắt đầu phải nhỏ hơn ngày kết thúc'
+      });
+    }
+
+    // Generate showtimes
+    while (currentDate <= end) {
+      const dateString = currentDate.toISOString().split('T')[0];
+      
+      // Skip excluded dates
+      if (!excludeDates.includes(dateString)) {
+        times.forEach(time => {
+          showtimes.push({
+            time: time,
+            date: dateString
+          });
+        });
+      }
+      
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    // Check for duplicates before creating
+    const existingShowtimes = await ShowTime.find({
+      date: { $gte: startDate, $lte: endDate }
+    });
+
+    const duplicates = [];
+    const newShowtimes = showtimes.filter(showtime => {
+      const isDuplicate = existingShowtimes.some(existing => 
+        existing.date === showtime.date && existing.time === showtime.time
+      );
+      if (isDuplicate) {
+        duplicates.push(`${showtime.date} ${showtime.time}`);
+      }
+      return !isDuplicate;
+    });
+
+    if (newShowtimes.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tất cả thời gian chiếu đã tồn tại',
+        duplicates: duplicates
+      });
+    }
+
+    // Create new showtimes
+    const createdShowtimes = await ShowTime.insertMany(newShowtimes);
+
+    res.status(201).json({
+      success: true,
+      message: `Đã tạo ${createdShowtimes.length} thời gian chiếu`,
+      data: {
+        created: createdShowtimes.length,
+        duplicatesSkipped: duplicates.length,
+        duplicates: duplicates,
+        showtimes: createdShowtimes
+      }
+    });
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};
+
+// @desc    Xóa thời gian chiếu theo khoảng ngày
+// @route   DELETE /api/showtimes/bulk
+// @access  Private (Admin)
+exports.deleteShowtimesByDateRange = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vui lòng cung cấp startDate và endDate'
+      });
+    }
+
+    const result = await ShowTime.deleteMany({
+      date: { $gte: startDate, $lte: endDate }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Đã xóa ${result.deletedCount} thời gian chiếu`,
+      deletedCount: result.deletedCount
+    });
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};

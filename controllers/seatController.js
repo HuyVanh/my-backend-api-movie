@@ -198,3 +198,43 @@ exports.deleteSeat = async (req, res) => {
     });
   }
 };
+// @desc    Tạo nhiều ghế cùng lúc
+// @route   POST /api/seats/bulk
+// @access  Private (Admin)
+exports.createBulkSeats = async (req, res) => {
+  try {
+    const { seats } = req.body;
+
+    if (!seats || !Array.isArray(seats)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vui lòng cung cấp mảng ghế'
+      });
+    }
+
+    // Kiểm tra room có tồn tại cho tất cả ghế
+    const roomIds = [...new Set(seats.map(seat => seat.room))];
+    const rooms = await Room.find({ _id: { $in: roomIds } });
+    
+    if (rooms.length !== roomIds.length) {
+      return res.status(400).json({
+        success: false,
+        error: 'Một số room không tồn tại'
+      });
+    }
+
+    const createdSeats = await Seat.insertMany(seats);
+
+    res.status(201).json({
+      success: true,
+      count: createdSeats.length,
+      data: createdSeats
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};

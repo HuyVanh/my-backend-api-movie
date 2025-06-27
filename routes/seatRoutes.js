@@ -9,13 +9,15 @@ const {
   createSeat,
   updateSeat,
   deleteSeat,
-  getAvailableSeats
+  getAvailableSeats,
+  createBulkSeats
 } = require('../controllers/seatController');
 
 // Routes công khai
 router.route('/').get(getSeats);
 router.route('/available').get(getAvailableSeats);
 router.route('/:id').get(getSeat);
+router.route('/bulk').post(createBulkSeats);
 
 // Routes cho admin
 router.use(protect);
