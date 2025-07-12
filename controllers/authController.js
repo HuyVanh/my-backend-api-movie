@@ -502,3 +502,68 @@ exports.resetPassword = async (req, res) => {
     });
   }
 };
+// @desc    Đăng ký admin
+// @route   POST /api/auth/register-admin
+// @access  Public (hoặc Protected tùy yêu cầu)
+exports.registerAdmin = async (req, res) => {
+  try {
+    console.log('=== REGISTER ADMIN START ===');
+    console.log('Request body:', req.body);
+    
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
+    }
+
+    const { name, email, password, number_phone, date_of_birth, gender } = req.body;
+
+    // Check existing user
+    const existingUser = await User.findOne({
+      $or: [{ email }, { number_phone }]
+    });
+    
+    if (existingUser) {
+      const field = existingUser.email === email ? 'Email' : 'Số điện thoại';
+      return res.status(400).json({
+        success: false,
+        error: `${field} đã được đăng ký`
+      });
+    }
+
+    // Create admin user (không cần OTP verification)
+    const adminUser = await User.create({
+      name,
+      email,
+      password,
+      number_phone,
+      date_of_birth,
+      gender,
+      role: 'admin',
+      email_verify: true // Admin tự động verify
+    });
+
+    console.log('Admin created successfully:', adminUser._id);
+    
+    sendTokenResponse(adminUser, 201, res);
+    
+  } catch (err) {
+    console.error('=== REGISTER ADMIN ERROR ===');
+    console.error('Error:', err);
+    
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyValue)[0];
+      return res.status(400).json({
+        success: false,
+        error: `${field === 'email' ? 'Email' : 'Số điện thoại'} đã được đăng ký`
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi tạo admin: ' + err.message
+    });
+  }
+};

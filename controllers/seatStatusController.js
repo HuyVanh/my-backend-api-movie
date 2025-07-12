@@ -1,215 +1,455 @@
+// controllers/seatStatusController.js
 const SeatStatus = require('../models/seatStatusModel');
+const ShowTime = require('../models/showTimeModel');
 const Seat = require('../models/seatModel');
 const Room = require('../models/roomModel');
 
-// @desc    Lấy tất cả trạng thái ghế
-// @route   GET /api/seatstatus
-// @access  Private (Admin)
-exports.getSeatStatuses = async (req, res) => {
-  try {
-    const seatStatuses = await SeatStatus.find()
-      .populate('seat', 'name price')
-      .populate('room', 'name')
-      .populate('time', 'time');
-
-    res.status(200).json({
-      success: true,
-      count: seatStatuses.length,
-      data: seatStatuses
-    });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi server'
-    });
-  }
-};
-
-// @desc    Lấy chi tiết trạng thái ghế
-// @route   GET /api/seatstatus/:id
-// @access  Private (Admin)
-exports.getSeatStatus = async (req, res) => {
-  try {
-    const seatStatus = await SeatStatus.findById(req.params.id)
-      .populate('seat', 'name price')
-      .populate('room', 'name')
-      .populate('time', 'time');
-
-    if (!seatStatus) {
-      return res.status(404).json({
-        success: false,
-        error: 'Không tìm thấy trạng thái ghế'
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      data: seatStatus
-    });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi server'
-    });
-  }
-};
-
-// @desc    Lấy trạng thái ghế theo phòng
-// @route   GET /api/seatstatus/room/:roomId?day=:day&time=:timeId
+// @desc    Lấy trạng thái ghế cho 1 showtime
+// @route   GET /api/seatstatus/showtime/:showtimeId
 // @access  Public
-exports.getSeatStatusByRoom = async (req, res) => {
+exports.getSeatStatusForShowtime = async (req, res) => {
   try {
-    const { roomId } = req.params;
-    const { day, time } = req.query;
+    const { showtimeId } = req.params;
 
-    if (!day || !time) {
-      return res.status(400).json({
-        success: false,
-        error: 'Vui lòng cung cấp day và time'
-      });
-    }
+    // Kiểm tra showtime có tồn tại không
+    const showtime = await ShowTime.findById(showtimeId)
+      .populate('movie', 'name duration image')
+      .populate('cinema', 'name address')
+      .populate('room', 'name');
 
-    // Kiểm tra room có tồn tại không
-    const room = await Room.findById(roomId);
-    if (!room) {
+    if (!showtime) {
       return res.status(404).json({
         success: false,
-        error: 'Không tìm thấy phòng chiếu'
+        message: 'Không tìm thấy suất chiếu'
       });
     }
 
-    // Lấy tất cả ghế trong phòng
-    const seats = await Seat.find({ room: roomId });
+    // Lấy tất cả seat status cho showtime này
+    const seatStatuses = await SeatStatus.find({ showtime: showtimeId })
+      .populate({
+        path: 'seat',
+        select: 'name price'
+      })
+      .sort('seat');
 
-    // Lấy trạng thái ghế cho ngày và giờ cụ thể
-    const seatStatuses = await SeatStatus.find({
-      room: roomId,
-      day: day,
-      time: time
-    }).populate('seat', 'name price');
-
-    // Tạo map trạng thái ghế
-    const statusMap = {};
-    seatStatuses.forEach(status => {
-      statusMap[status.seat._id.toString()] = status.status;
-    });
-
-    // Kết hợp thông tin ghế với trạng thái
-    const seatsWithStatus = seats.map(seat => ({
-      _id: seat._id,
-      name: seat.name,
-      price: seat.price,
-      room: seat.room,
-      status: statusMap[seat._id.toString()] || 'available'
+    // Organize dữ liệu để dễ hiển thị
+    const seats = seatStatuses.map(seatStatus => ({
+      seatId: seatStatus.seat._id,
+      seatName: seatStatus.seat.name,
+      price: seatStatus.seat.price,
+      status: seatStatus.status,
+      isAvailable: seatStatus.status === 'available',
+      isReserved: seatStatus.status === 'reserved',
+      isBooked: seatStatus.status === 'booked',
+      reservedUntil: seatStatus.reservedUntil
     }));
 
-    res.status(200).json({
+    // Tính summary
+    const summary = {
+      total: seats.length,
+      available: seats.filter(s => s.status === 'available').length,
+      reserved: seats.filter(s => s.status === 'reserved').length,
+      booked: seats.filter(s => s.status === 'booked').length
+    };
+
+    res.json({
       success: true,
-      count: seatsWithStatus.length,
-      data: seatsWithStatus
+      data: {
+        showtime: {
+          id: showtime._id,
+          movie: showtime.movie,
+          cinema: showtime.cinema,
+          room: showtime.room,
+          date: showtime.date,
+          time: showtime.time
+        },
+        seats,
+        summary
+      }
     });
-  } catch (err) {
-    console.error(err.message);
+
+  } catch (error) {
+    console.error(error);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      message: 'Lỗi server',
+      error: error.message
     });
   }
 };
 
-// @desc    Tạo trạng thái ghế mới
-// @route   POST /api/seatstatus
-// @access  Private (Admin)
-exports.createSeatStatus = async (req, res) => {
+// @desc    Reserve ghế (giữ chỗ tạm thời)
+// @route   POST /api/seatstatus/reserve
+// @access  Private
+exports.reserveSeats = async (req, res) => {
   try {
-    // Kiểm tra xem trạng thái ghế đã tồn tại chưa
-    const existingSeatStatus = await SeatStatus.findOne({
-      seat: req.body.seat,
-      room: req.body.room,
-      day: req.body.day,
-      time: req.body.time
-    });
+    const { showtimeId, seatIds, userId, reserveMinutes = 15 } = req.body;
 
-    if (existingSeatStatus) {
+    // Validate inputs
+    if (!showtimeId || !seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Trạng thái ghế cho thời gian này đã tồn tại'
+        message: 'Thiếu thông tin: showtimeId, seatIds'
       });
     }
 
-    const seatStatus = await SeatStatus.create(req.body);
+    // Kiểm tra showtime có tồn tại không
+    const showtime = await ShowTime.findById(showtimeId);
+    if (!showtime) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy suất chiếu'
+      });
+    }
+
+    // Kiểm tra các ghế có tồn tại và available không
+    const seatStatuses = await SeatStatus.find({
+      showtime: showtimeId,
+      seat: { $in: seatIds }
+    }).populate('seat', 'name price');
+
+    // Validate tất cả ghế đều tồn tại
+    if (seatStatuses.length !== seatIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Một số ghế không tồn tại trong suất chiếu này'
+      });
+    }
+
+    // Kiểm tra tất cả ghế đều available
+    const unavailableSeats = seatStatuses.filter(s => s.status !== 'available');
+    if (unavailableSeats.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Một số ghế đã được đặt hoặc giữ chỗ',
+        unavailableSeats: unavailableSeats.map(s => ({
+          name: s.seat.name,
+          status: s.status
+        }))
+      });
+    }
+
+    // Reserve các ghế
+    const reserveUntil = new Date(Date.now() + reserveMinutes * 60 * 1000);
+    
+    await SeatStatus.updateMany(
+      {
+        showtime: showtimeId,
+        seat: { $in: seatIds }
+      },
+      {
+        status: 'reserved',
+        reservedUntil: reserveUntil
+      }
+    );
+
+    // Tính tổng tiền
+    const totalPrice = seatStatuses.reduce((sum, seatStatus) => {
+      return sum + seatStatus.seat.price;
+    }, 0);
+
+    res.json({
+      success: true,
+      message: `Đã giữ chỗ ${seatIds.length} ghế trong ${reserveMinutes} phút`,
+      data: {
+        reservedSeats: seatStatuses.map(s => ({
+          id: s.seat._id,
+          name: s.seat.name,
+          price: s.seat.price
+        })),
+        reservedUntil,
+        totalPrice,
+        expiresIn: `${reserveMinutes} phút`
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Confirm booking (chuyển từ reserved sang booked)
+// @route   POST /api/seatstatus/confirm
+// @access  Private
+exports.confirmBooking = async (req, res) => {
+  try {
+    const { showtimeId, seatIds, ticketId } = req.body;
+
+    // Validate inputs
+    if (!showtimeId || !seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu thông tin: showtimeId, seatIds'
+      });
+    }
+
+    // Kiểm tra các ghế đang reserved và chưa hết hạn
+    const seatStatuses = await SeatStatus.find({
+      showtime: showtimeId,
+      seat: { $in: seatIds },
+      status: 'reserved',
+      reservedUntil: { $gt: new Date() } // Chưa hết hạn
+    }).populate('seat', 'name price');
+
+    if (seatStatuses.length !== seatIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Một số ghế không còn được giữ chỗ hoặc đã hết hạn'
+      });
+    }
+
+    // Confirm booking
+    await SeatStatus.updateMany(
+      {
+        showtime: showtimeId,
+        seat: { $in: seatIds }
+      },
+      {
+        status: 'booked',
+        $unset: { reservedUntil: 1 } // Xóa thời gian hết hạn
+      }
+    );
+
+    res.json({
+      success: true,
+      message: `Đã xác nhận đặt ${seatIds.length} ghế`,
+      data: {
+        bookedSeats: seatStatuses.map(s => ({
+          id: s.seat._id,
+          name: s.seat.name,
+          price: s.seat.price
+        })),
+        ticketId
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Cancel reservation (từ reserved về available)
+// @route   POST /api/seatstatus/cancel
+// @access  Private
+exports.cancelReservation = async (req, res) => {
+  try {
+    const { showtimeId, seatIds } = req.body;
+
+    // Validate inputs
+    if (!showtimeId || !seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu thông tin: showtimeId, seatIds'
+      });
+    }
+
+    // Cancel reservation
+    const result = await SeatStatus.updateMany(
+      {
+        showtime: showtimeId,
+        seat: { $in: seatIds },
+        status: 'reserved'
+      },
+      {
+        status: 'available',
+        $unset: { reservedUntil: 1 }
+      }
+    );
+
+    res.json({
+      success: true,
+      message: `Đã hủy giữ chỗ cho ${result.modifiedCount} ghế`,
+      cancelledCount: result.modifiedCount
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Cleanup expired reservations (dùng cho cron job)
+// @route   POST /api/seatstatus/cleanup
+// @access  Private (Admin)
+exports.cleanupExpiredReservations = async (req, res) => {
+  try {
+    const result = await SeatStatus.updateMany(
+      {
+        status: 'reserved',
+        reservedUntil: { $lt: new Date() }
+      },
+      {
+        status: 'available',
+        $unset: { reservedUntil: 1 }
+      }
+    );
+
+    console.log(`Cleaned up ${result.modifiedCount} expired reservations`);
+
+    res.json({
+      success: true,
+      message: `Đã làm sạch ${result.modifiedCount} ghế hết hạn giữ chỗ`,
+      cleanedCount: result.modifiedCount
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Lấy thống kê seat status
+// @route   GET /api/seatstatus/stats/:showtimeId
+// @access  Public
+exports.getSeatStatusStats = async (req, res) => {
+  try {
+    const { showtimeId } = req.params;
+
+    // Kiểm tra showtime có tồn tại không
+    const showtime = await ShowTime.findById(showtimeId);
+    if (!showtime) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy suất chiếu'
+      });
+    }
+
+    // Thống kê theo status
+    const stats = await SeatStatus.aggregate([
+      { $match: { showtime: mongoose.Types.ObjectId(showtimeId) } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Convert to object
+    const statusStats = {};
+    stats.forEach(stat => {
+      statusStats[stat._id] = stat.count;
+    });
+
+    // Ensure all statuses are included
+    const finalStats = {
+      available: statusStats.available || 0,
+      reserved: statusStats.reserved || 0,
+      booked: statusStats.booked || 0,
+      total: (statusStats.available || 0) + (statusStats.reserved || 0) + (statusStats.booked || 0)
+    };
+
+    // Tính phần trăm
+    const percentages = {};
+    Object.keys(finalStats).forEach(key => {
+      if (key !== 'total') {
+        percentages[key] = finalStats.total > 0 ? 
+          Math.round((finalStats[key] / finalStats.total) * 100) : 0;
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        showtime: {
+          id: showtime._id,
+          date: showtime.date,
+          time: showtime.time
+        },
+        stats: finalStats,
+        percentages
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi server',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Khởi tạo seat status cho showtime (nếu chưa có)
+// @route   POST /api/seatstatus/initialize/:showtimeId
+// @access  Private (Admin)
+exports.initializeSeatStatus = async (req, res) => {
+  try {
+    const { showtimeId } = req.params;
+
+    // Kiểm tra showtime có tồn tại không
+    const showtime = await ShowTime.findById(showtimeId);
+    if (!showtime) {
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy suất chiếu'
+      });
+    }
+
+    // Kiểm tra đã có seat status chưa
+    const existingCount = await SeatStatus.countDocuments({ showtime: showtimeId });
+    if (existingCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Suất chiếu đã có ${existingCount} seat status`
+      });
+    }
+
+    // Lấy tất cả ghế trong room
+    const seats = await Seat.find({ room: showtime.room });
+    
+    if (seats.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phòng chiếu chưa có ghế nào'
+      });
+    }
+
+    // Tạo seat status cho tất cả ghế
+    const seatStatuses = seats.map(seat => ({
+      seat: seat._id,
+      room: showtime.room,
+      status: 'available',
+      day: showtime.date,
+      showtime: showtime._id
+    }));
+
+    const createdSeatStatuses = await SeatStatus.insertMany(seatStatuses);
 
     res.status(201).json({
       success: true,
-      data: seatStatus
+      message: `Đã khởi tạo ${createdSeatStatuses.length} seat status cho suất chiếu`,
+      data: {
+        showtime: showtime._id,
+        seatsInitialized: createdSeatStatuses.length
+      }
     });
-  } catch (err) {
-    console.error(err.message);
+
+  } catch (error) {
+    console.error(error);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      message: 'Lỗi server',
+      error: error.message
     });
   }
-};
-
-// @desc    Cập nhật trạng thái ghế
-// @route   PUT /api/seatstatus/:id
-// @access  Private (Admin)
-exports.updateSeatStatus = async (req, res) => {
-  try {
-    let seatStatus = await SeatStatus.findById(req.params.id);
-
-    if (!seatStatus) {
-      return res.status(404).json({
-        success: false,
-        error: 'Không tìm thấy trạng thái ghế'
-      });
-    }
-
-    seatStatus = await SeatStatus.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true
-    });
-
-    res.status(200).json({
-      success: true,
-      data: seatStatus
-    });} catch (err) {
-   console.error(err.message);
-   res.status(500).json({
-     success: false,
-     error: 'Lỗi server'
-   });
- }
-};
-
-// @desc    Xóa trạng thái ghế
-// @route   DELETE /api/seatstatus/:id
-// @access  Private (Admin)
-exports.deleteSeatStatus = async (req, res) => {
- try {
-   const seatStatus = await SeatStatus.findById(req.params.id);
-
-   if (!seatStatus) {
-     return res.status(404).json({
-       success: false,
-       error: 'Không tìm thấy trạng thái ghế'
-     });
-   }
-
-   await SeatStatus.findByIdAndDelete(req.params.id);
-
-   res.status(200).json({
-     success: true,
-     data: {}
-   });
- } catch (err) {
-   console.error(err.message);
-   res.status(500).json({
-     success: false,
-     error: 'Lỗi server'
-   });
- }
 };

@@ -1,27 +1,45 @@
+// routes/roomRoutes.js
 const express = require('express');
-const router = express.Router({ mergeParams: true });
-const { protect, authorize } = require('../middleware/auth');
+const router = express.Router();
 
-// Import controllers (chúng ta sẽ tạo sau)
+// Import controller functions
 const {
   getRooms,
   getRoom,
   createRoom,
   updateRoom,
-  deleteRoom
+  deleteRoom,
+  getRoomsByCinema
 } = require('../controllers/roomController');
 
-// Routes công khai
-router.route('/').get(getRooms);
-router.route('/:id').get(getRoom);
+// @route   GET /api/rooms
+// @desc    Lấy tất cả phòng chiếu
+// @access  Public
+router.get('/', getRooms);
 
-// Routes cho admin
-router.use(protect);
-router.use(authorize('admin'));
+// @route   GET /api/rooms/cinema/:cinemaId
+// @desc    Lấy phòng chiếu theo cinema
+// @access  Public
+router.get('/cinema/:cinemaId', getRoomsByCinema);
 
-router.route('/').post(createRoom);
-router.route('/:id')
-  .put(updateRoom)
-  .delete(deleteRoom);
+// @route   GET /api/rooms/:id
+// @desc    Lấy chi tiết phòng chiếu
+// @access  Public
+router.get('/:id', getRoom);
+
+// @route   POST /api/rooms
+// @desc    Tạo phòng chiếu mới
+// @access  Private (Admin)
+router.post('/', createRoom);
+
+// @route   PUT /api/rooms/:id
+// @desc    Cập nhật phòng chiếu
+// @access  Private (Admin)
+router.put('/:id', updateRoom);
+
+// @route   DELETE /api/rooms/:id
+// @desc    Xóa phòng chiếu
+// @access  Private (Admin)
+router.delete('/:id', deleteRoom);
 
 module.exports = router;

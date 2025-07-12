@@ -1,33 +1,51 @@
+// routes/seatStatusRoutes.js
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../middleware/auth');
 
-// Import controllers (chúng ta sẽ tạo sau)
+// Import controller functions
 const {
-  getSeatStatuses,
-  getSeatStatus,
-  createSeatStatus,
-  updateSeatStatus,
-  deleteSeatStatus,
-  getSeatStatusByRoom
+  getSeatStatusForShowtime,
+  reserveSeats,
+  confirmBooking,
+  cancelReservation,
+  cleanupExpiredReservations,
+  getSeatStatusStats,
+  initializeSeatStatus
 } = require('../controllers/seatStatusController');
 
-// Routes công khai
-router.route('/room/:roomId').get(getSeatStatusByRoom);
+// @route   GET /api/seatstatus/showtime/:showtimeId
+// @desc    Lấy trạng thái ghế cho 1 showtime
+// @access  Public
+router.get('/showtime/:showtimeId', getSeatStatusForShowtime);
 
-// Routes cho user đã đăng nhập
-router.use(protect);
+// @route   POST /api/seatstatus/reserve
+// @desc    Reserve ghế (giữ chỗ tạm thời)
+// @access  Private
+router.post('/reserve', reserveSeats);
 
-// Routes cho admin
-router.use(authorize('admin'));
+// @route   POST /api/seatstatus/confirm
+// @desc    Confirm booking (chuyển từ reserved sang booked)
+// @access  Private
+router.post('/confirm', confirmBooking);
 
-router.route('/')
-  .get(getSeatStatuses)
-  .post(createSeatStatus);
+// @route   POST /api/seatstatus/cancel
+// @desc    Cancel reservation (từ reserved về available)
+// @access  Private
+router.post('/cancel', cancelReservation);
 
-router.route('/:id')
-  .get(getSeatStatus)
-  .put(updateSeatStatus)
-  .delete(deleteSeatStatus);
+// @route   POST /api/seatstatus/cleanup
+// @desc    Cleanup expired reservations (dùng cho cron job)
+// @access  Private (Admin)
+router.post('/cleanup', cleanupExpiredReservations);
+
+// @route   GET /api/seatstatus/stats/:showtimeId
+// @desc    Lấy thống kê seat status
+// @access  Public
+router.get('/stats/:showtimeId', getSeatStatusStats);
+
+// @route   POST /api/seatstatus/initialize/:showtimeId
+// @desc    Khởi tạo seat status cho showtime (nếu chưa có)
+// @access  Private (Admin)
+router.post('/initialize/:showtimeId', initializeSeatStatus);
 
 module.exports = router;

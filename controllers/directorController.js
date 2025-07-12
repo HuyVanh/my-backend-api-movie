@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Director = require('../models/directorModel');
 
 // @desc    Lấy tất cả đạo diễn
@@ -53,7 +54,15 @@ exports.getDirector = async (req, res) => {
 // @access  Private (Admin)
 exports.createDirector = async (req, res) => {
   try {
-    const director = await Director.create(req.body);
+    // Chỉ lấy các trường hợp lệ từ request body
+    const { name, image } = req.body;
+    const directorData = { name };
+    
+    if (image) {
+      directorData.image = image;
+    }
+    
+    const director = await Director.create(directorData);
 
     res.status(201).json({
       success: true,
@@ -82,7 +91,14 @@ exports.updateDirector = async (req, res) => {
       });
     }
 
-    director = await Director.findByIdAndUpdate(req.params.id, req.body, {
+    // Chỉ lấy các trường hợp lệ từ request body
+    const { name, image } = req.body;
+    const updateData = {};
+    
+    if (name) updateData.name = name;
+    if (image !== undefined) updateData.image = image;
+
+    director = await Director.findByIdAndUpdate(req.params.id, updateData, {
       new: true,
       runValidators: true
     });
@@ -144,9 +160,14 @@ exports.uploadDirectorImage = async (req, res) => {
     }
 
     // Logic upload file tại đây
+    // Sau khi upload, cập nhật trường image trong database
+    
+    director.image = req.imageUrl; // Giả sử req.imageUrl chứa URL của ảnh sau khi upload
+    await director.save();
+
     res.status(200).json({
       success: true,
-      data: 'Ảnh đã được upload thành công'
+      data: director
     });
   } catch (err) {
     console.error(err.message);

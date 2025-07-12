@@ -2,12 +2,27 @@ const mongoose = require('mongoose');
 
 const ShowTimeSchema = new mongoose.Schema({
   time: {
-    type: String,
+    type: Date,
     required: [true, 'Vui lòng nhập thời gian']
   },
   date: {
-    type: String,
+    type: Date,
     required: [true, 'Vui lòng nhập ngày']
+  },
+  movie: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Movie',
+    required: true
+  },
+  room: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    required: true
+  },
+  cinema: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Cinema',
+    required: true
   }
 });
 

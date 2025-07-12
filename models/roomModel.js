@@ -5,14 +5,6 @@ const RoomSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Vui lòng nhập tên phòng']
   },
-  movie: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Movie'
-  },
-  showtime: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ShowTime'
-  },
   cinema: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Cinema',

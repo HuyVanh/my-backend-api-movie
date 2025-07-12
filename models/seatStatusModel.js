@@ -17,17 +17,17 @@ const SeatStatusSchema = new mongoose.Schema({
     default: 'available'
   },
   day: {
-    type: String,
+    type: Date,
     required: true
   },
-  time: {
+  showtime: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Time',
+    ref: 'ShowTime',
     required: true
   }
 });
 
-// Tạo index cho sự kết hợp độc nhất giữa seat, room, day và time
-SeatStatusSchema.index({ seat: 1, room: 1, day: 1, time: 1 }, { unique: true });
+// Tạo index cho sự kết hợp độc nhất giữa seat, room, day và showtime
+SeatStatusSchema.index({ seat: 1, room: 1, day: 1, showtime: 1 }, { unique: true });
 
 module.exports = mongoose.model('SeatStatus', SeatStatusSchema);
