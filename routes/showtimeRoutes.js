@@ -14,7 +14,7 @@ const {
   getShowtimesByDate,
   generateShowtimes,
   deleteShowtimesByDateRange
-} = require('../controllers/showTimeController');
+} = require('../controllers/showtimeController');
 
 // @route   GET /api/showtimes
 // @desc    Lấy tất cả thời gian chiếu
