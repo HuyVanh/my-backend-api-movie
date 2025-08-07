@@ -1,4 +1,4 @@
-// routes/seatStatusRoutes.js
+// routes/seatStatusRoutes.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
 
@@ -13,37 +13,38 @@ const {
   initializeSeatStatus
 } = require('../controllers/seatStatusController');
 
-// @route   GET /api/seatstatus/showtime/:showtimeId
+// ✅ FIXED: Đổi endpoint để match với frontend
+// @route   GET /api/seat-status/showtime/:showtimeId
 // @desc    Lấy trạng thái ghế cho 1 showtime
 // @access  Public
 router.get('/showtime/:showtimeId', getSeatStatusForShowtime);
 
-// @route   POST /api/seatstatus/reserve
+// @route   POST /api/seat-status/reserve
 // @desc    Reserve ghế (giữ chỗ tạm thời)
 // @access  Private
 router.post('/reserve', reserveSeats);
 
-// @route   POST /api/seatstatus/confirm
+// @route   POST /api/seat-status/confirm
 // @desc    Confirm booking (chuyển từ reserved sang booked)
 // @access  Private
 router.post('/confirm', confirmBooking);
 
-// @route   POST /api/seatstatus/cancel
+// @route   POST /api/seat-status/cancel
 // @desc    Cancel reservation (từ reserved về available)
 // @access  Private
 router.post('/cancel', cancelReservation);
 
-// @route   POST /api/seatstatus/cleanup
+// @route   POST /api/seat-status/cleanup
 // @desc    Cleanup expired reservations (dùng cho cron job)
 // @access  Private (Admin)
 router.post('/cleanup', cleanupExpiredReservations);
 
-// @route   GET /api/seatstatus/stats/:showtimeId
+// @route   GET /api/seat-status/stats/:showtimeId
 // @desc    Lấy thống kê seat status
 // @access  Public
 router.get('/stats/:showtimeId', getSeatStatusStats);
 
-// @route   POST /api/seatstatus/initialize/:showtimeId
+// @route   POST /api/seat-status/initialize/:showtimeId
 // @desc    Khởi tạo seat status cho showtime (nếu chưa có)
 // @access  Private (Admin)
 router.post('/initialize/:showtimeId', initializeSeatStatus);

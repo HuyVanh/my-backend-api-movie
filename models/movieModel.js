@@ -20,7 +20,6 @@ const movieSchema = new mongoose.Schema({
     type: String, // Đổi từ Number sang String để phù hợp với TIME type
     required: [true, 'Thời lượng phim là bắt buộc']
   },
-  // ✨ THAY ĐỔI: Reference đến nhiều Directors
   director: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Director',
@@ -73,7 +72,7 @@ const movieSchema = new mongoose.Schema({
   },
   release_at: {
     type: String,
-    trim: true // Có thể là tên rạp, quốc gia phát hành
+    trim: true 
   }
 }, {
   timestamps: true, // Tự động tạo createdAt và updatedAt

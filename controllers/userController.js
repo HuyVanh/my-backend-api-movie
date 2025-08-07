@@ -1,5 +1,6 @@
 const User = require('../models/userModel');
 const bcrypt = require('bcryptjs');
+const {cloidinary} = require('../middleware/upload');
 
 // =====================================
 // USER PROFILE MANAGEMENT (Logged-in users)
@@ -168,32 +169,79 @@ exports.uploadAvatar = async (req, res) => {
   try {
     console.log('=== UPLOAD AVATAR START ===');
     console.log('User ID:', req.user.id);
+    console.log('File uploaded:', req.file);
     
-    const { imageUrl } = req.body;
-
-    if (!imageUrl) {
+    // Kiểm tra xem có file được upload không
+    if (!req.file) {
       return res.status(400).json({
         success: false,
-        error: 'Vui lòng cung cấp URL hình ảnh'
+        error: 'Vui lòng chọn file ảnh để upload'
       });
     }
 
+    // Lấy URL của ảnh đã upload lên Cloudinary
+    const imageUrl = req.file.path; // Cloudinary trả về secure_url trong field path
+    const publicId = req.file.filename; // Public ID để có thể xóa ảnh cũ
+
+    console.log('Uploaded image URL:', imageUrl);
+    console.log('Public ID:', publicId);
+
+    // Lấy thông tin user hiện tại để xóa ảnh cũ
+    const currentUser = await User.findById(req.user.id);
+    
+    // Nếu user đã có ảnh cũ trên Cloudinary, xóa nó
+    if (currentUser.image && currentUser.cloudinary_public_id) {
+      try {
+        await cloudinary.uploader.destroy(currentUser.cloudinary_public_id);
+        console.log('Deleted old avatar:', currentUser.cloudinary_public_id);
+      } catch (deleteError) {
+        console.error('Error deleting old avatar:', deleteError);
+        // Không throw error, vì upload mới đã thành công
+      }
+    }
+
+    // Cập nhật thông tin user với ảnh mới
     const user = await User.findByIdAndUpdate(
       req.user.id,
-      { image: imageUrl },
+      { 
+        image: imageUrl,
+        cloudinary_public_id: publicId // Lưu public_id để xóa sau này
+      },
       { new: true }
     ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'Không tìm thấy user'
+      });
+    }
 
     res.status(200).json({
       success: true,
       message: 'Upload avatar thành công',
-      data: user
+      data: {
+        imageUrl: imageUrl,
+        user: user
+      }
     });
+
   } catch (err) {
     console.error('Upload avatar error:', err);
+    
+    // Nếu có lỗi và file đã được upload, xóa nó
+    if (req.file && req.file.filename) {
+      try {
+        await cloudinary.uploader.destroy(req.file.filename);
+        console.log('Cleaned up uploaded file due to error');
+      } catch (cleanupError) {
+        console.error('Error cleaning up file:', cleanupError);
+      }
+    }
+    
     res.status(500).json({
       success: false,
-      error: 'Lỗi server khi upload avatar'
+      error: err.message || 'Lỗi server khi upload avatar'
     });
   }
 };

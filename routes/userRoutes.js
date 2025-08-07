@@ -20,6 +20,7 @@ const {
 
 // Import middleware
 const { protect, authorize } = require('../middleware/auth');
+const { upload, handleUploadError } = require('../middleware/upload'); // THÊM IMPORT NÀY
 
 // =====================================
 // USER PROFILE ROUTES (Logged-in users)
@@ -35,7 +36,8 @@ router.put('/profile', protect, updateProfile);
 router.put('/change-password', protect, changePassword);
 
 // @route   POST /api/users/upload-avatar
-router.post('/upload-avatar', protect, uploadAvatar);
+// THAY ĐỔI DÒNG NÀY - thêm middleware upload
+router.post('/upload-avatar', protect, upload.single('image'), handleUploadError, uploadAvatar);
 
 // =====================================
 // ADMIN ROUTES
@@ -59,5 +61,4 @@ router.put('/:id', protect, authorize('admin'), updateUser);
 // @route   DELETE /api/users/:id
 router.delete('/:id', protect, authorize('admin'), deleteUser);
 
-// QUAN TRỌNG: Export router (không phải object)
 module.exports = router;
