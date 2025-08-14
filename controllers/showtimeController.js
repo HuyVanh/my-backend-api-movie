@@ -12,7 +12,7 @@ const mongoose = require('mongoose');
 // @access  Public
 exports.getShowtimes = async (req, res) => {
   try {
-    const { page = 1, limit = 20, date, movie, cinema, room } = req.query;
+    const { page = 1, limit = 1000, date, movie, cinema, room } = req.query;
     
     // Build query
     let query = {};
@@ -92,6 +92,7 @@ exports.getShowtime = async (req, res) => {
 // @desc    Tạo thời gian chiếu mới
 // @route   POST /api/showtimes
 // @access  Private (Admin)
+// Backend fix cho showTimeController.js - createShowtime function
 exports.createShowtime = async (req, res) => {
   try {
     const { time, date, movie, room, cinema } = req.body;
@@ -104,7 +105,64 @@ exports.createShowtime = async (req, res) => {
       });
     }
 
-    // Validate các references tồn tại
+    // Parse dates with proper timezone handling
+    const showtimeDate = new Date(date);
+    const showtimeTime = new Date(time);
+    
+    console.log('=== DUPLICATE CHECK DEBUG ===');
+    console.log('Received time:', time);
+    console.log('Received date:', date);
+    console.log('Parsed showtimeDate:', showtimeDate);
+    console.log('Parsed showtimeTime:', showtimeTime);
+    console.log('Room:', room);
+
+    // More robust duplicate check - check by date range and time
+    const startOfDay = new Date(showtimeDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(showtimeDate);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    // Extract hour and minute for precise time comparison
+    const targetHour = showtimeTime.getHours();
+    const targetMinute = showtimeTime.getMinutes();
+    
+    console.log('Target time:', `${targetHour}:${targetMinute}`);
+    console.log('Date range:', { startOfDay, endOfDay });
+
+    // Find existing showtimes for the same room and date
+    const existingShowtimes = await ShowTime.find({
+      room: room,
+      date: {
+        $gte: startOfDay,
+        $lte: endOfDay
+      }
+    });
+    
+    console.log('Found existing showtimes:', existingShowtimes.length);
+    
+    // Check if any existing showtime has the same time
+    const duplicateShowtime = existingShowtimes.find(showtime => {
+      const existingTime = new Date(showtime.time);
+      const existingHour = existingTime.getHours();
+      const existingMinute = existingTime.getMinutes();
+      
+      console.log(`Comparing: ${existingHour}:${existingMinute} vs ${targetHour}:${targetMinute}`);
+      
+      return existingHour === targetHour && existingMinute === targetMinute;
+    });
+
+    if (duplicateShowtime) {
+      console.log('❌ Duplicate found:', duplicateShowtime._id);
+      return res.status(400).json({
+        success: false,
+        error: 'Thời gian chiếu này đã tồn tại cho phòng này'
+      });
+    }
+
+    console.log('✅ No duplicate found, proceeding with creation');
+
+    // Validate references (existing code)
     const movieDoc = await Movie.findById(movie);
     if (!movieDoc) {
       return res.status(400).json({
@@ -137,30 +195,16 @@ exports.createShowtime = async (req, res) => {
       });
     }
 
-    // Check for duplicate showtime
-    const existingShowtime = await ShowTime.findOne({
-      date: new Date(date),
-      time: new Date(time),
-      room
-    });
-
-    if (existingShowtime) {
-      return res.status(400).json({
-        success: false,
-        error: 'Thời gian chiếu này đã tồn tại cho phòng này'
-      });
-    }
-
     // Tạo showtime
     const showtime = await ShowTime.create({
-      time: new Date(time),
-      date: new Date(date),
+      time: showtimeTime,
+      date: showtimeDate,
       movie,
       room,
       cinema
     });
     
-    // *** QUAN TRỌNG: Tạo SeatStatus cho TẤT CẢ ghế trong room ***
+    // Tạo SeatStatus cho TẤT CẢ ghế trong room (existing code)
     const seats = await Seat.find({ room });
     
     if (seats.length > 0) {
@@ -168,7 +212,7 @@ exports.createShowtime = async (req, res) => {
         seat: seat._id,
         room: room,
         status: 'available',
-        day: new Date(date),
+        day: showtimeDate,
         showtime: showtime._id
       }));
 
@@ -183,13 +227,15 @@ exports.createShowtime = async (req, res) => {
       { path: 'cinema', select: 'name address' }
     ]);
 
+    console.log('✅ Showtime created successfully:', showtime._id);
+
     res.status(201).json({
       success: true,
       message: `Tạo suất chiếu thành công với ${seats.length} ghế`,
       data: showtime
     });
   } catch (err) {
-    console.error(err);
+    console.error('💥 Create showtime error:', err);
     res.status(500).json({
       success: false,
       error: 'Lỗi server'

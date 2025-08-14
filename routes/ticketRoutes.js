@@ -13,32 +13,47 @@ const {
   getTicketsByEmail,
   getTicketsByUser,
   updatePaymentStatus,
-  cancelTicket,      // ✅ THÊM
-  validateTicket     // ✅ THÊM
+  cancelTicket,
+  validateTicket,
+  debugTickets,      // ✅ NEW: Debug endpoint
+  getTicketStats     // ✅ NEW: Statistics endpoint
 } = require('../controllers/ticketController');
 
-// ✅ Public routes
+// ============ PUBLIC ROUTES (No Authentication Required) ============
+
+// ✅ Debug endpoint - Should be FIRST for easy access
+router.route('/debug').get(debugTickets);
+
+// ✅ Public search routes
 router.route('/order/:orderId').get(getTicketByOrderId);
 router.route('/email/:email').get(getTicketsByEmail);
 
-// ✅ Protected routes
+// ============ PROTECTED ROUTES (Authentication Required) ============
 router.use(protect);
 
+// ✅ User's own tickets
 router.route('/mytickets').get(getMyTickets);
-router.route('/').post(createTicket);
-router.route('/:id')
-  .get(getTicket)
-  .put(updateTicket)
-  .delete(deleteTicket);
 
-// ✅ THÊM: Payment và Cancel routes
+// ✅ Ticket creation
+router.route('/').post(createTicket);
+
+// ✅ Individual ticket operations
+router.route('/:id')
+  .get(getTicket)        // Get ticket detail
+  .put(updateTicket)     // Update ticket (will be restricted to admin later)
+  .delete(deleteTicket); // Delete ticket (will be restricted to admin later)
+
+// ✅ Ticket actions
 router.route('/:id/payment').put(updatePaymentStatus);
 router.route('/:id/cancel').put(cancelTicket);
 router.route('/:id/validate').get(validateTicket);
 
-// ✅ Admin routes
+// ============ ADMIN ROUTES (Admin Authorization Required) ============
 router.use(authorize('admin'));
-router.route('/').get(getTickets);
-router.route('/user/:userId').get(getTicketsByUser);
+
+// ✅ Admin-only endpoints
+router.route('/').get(getTickets);                    // Get all tickets with pagination
+router.route('/stats').get(getTicketStats);          // Get ticket statistics
+router.route('/user/:userId').get(getTicketsByUser); // Get tickets by specific user
 
 module.exports = router;

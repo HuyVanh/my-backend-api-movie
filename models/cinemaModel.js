@@ -11,6 +11,10 @@ const CinemaSchema = new mongoose.Schema({
   },
   hotline: {
     type: String
+  },
+  isActive: {
+    type: Boolean,
+    default: true
   }
 });
 

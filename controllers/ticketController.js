@@ -10,102 +10,463 @@ const Discount = require('../models/discountModel');
 // ✅ NEW: Import notification helper
 const { createPaymentNotification } = require('./notificationController');
 
-// @desc    Lấy tất cả vé (Admin)
+// ============ UTILITY FUNCTIONS ============
+
+const logInfo = (message, data = null) => {
+  console.log(`ℹ️ [TICKET] ${message}`, data ? JSON.stringify(data, null, 2) : '');
+};
+
+const logError = (message, error) => {
+  console.error(`❌ [TICKET] ${message}:`, error);
+};
+
+const logSuccess = (message, data = null) => {
+  console.log(`✅ [TICKET] ${message}`, data ? JSON.stringify(data, null, 2) : '');
+};
+
+// ============ MAIN CONTROLLERS ============
+
+// @desc    Lấy tất cả vé (Admin) - WITH PAGINATION
 // @route   GET /api/tickets
 // @access  Private (Admin)
 exports.getTickets = async (req, res) => {
   try {
-    const tickets = await Ticket.find()
+    logInfo('GET TICKETS - Query params:', req.query);
+    
+    // ✅ ADD PAGINATION
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // ✅ ADD FILTERS
+    const filters = {};
+    if (req.query.status) filters.status = req.query.status;
+    if (req.query.search) {
+      filters.$or = [
+        { orderId: { $regex: req.query.search, $options: 'i' } },
+        { 'userInfo.fullName': { $regex: req.query.search, $options: 'i' } },
+        { 'userInfo.email': { $regex: req.query.search, $options: 'i' } }
+      ];
+    }
+
+    logInfo(`Pagination: Page ${page}, Limit ${limit}, Skip ${skip}`);
+    logInfo('Filters:', filters);
+
+    const tickets = await Ticket.find(filters)
       .populate('user', 'name email')
-      .populate('seats', 'name price')
-      .populate('movie', 'name image')
+      .populate('seats', 'name price row column seatNumber')
+      .populate('movie', 'name image duration genre')
       .populate('cinema', 'name address')
       .populate('room', 'name')
-      .populate('foodItems.food', 'name price')
+      .populate('foodItems.food', 'name price image')
       .populate('discount', 'name percent')
-      .populate('time', 'time date') // ✅ FIXED: now references ShowTime
-      .sort('-bookingTime');
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate', // ✅ Handle different field names
+        populate: {
+          path: 'movie room cinema',
+          select: 'name'
+        }
+      })
+      .sort('-bookingTime')
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Ticket.countDocuments(filters);
+
+    logSuccess(`Found ${tickets.length} tickets out of ${total} total`);
+
+    // ✅ TRANSFORM DATA for consistent frontend format
+    const transformedTickets = tickets.map(ticket => ({
+      _id: ticket._id,
+      orderId: ticket.orderId,
+      
+      // User info
+      user: ticket.user,
+      userInfo: ticket.userInfo,
+      customerName: ticket.userInfo?.fullName || ticket.user?.name || 'N/A',
+      customerEmail: ticket.userInfo?.email || ticket.user?.email || 'N/A',
+      
+      // Movie info
+      movie: ticket.movie,
+      movieTitle: ticket.movie?.name || 'N/A',
+      
+      // Cinema & Room info
+      cinema: ticket.cinema,
+      room: ticket.room,
+      cinemaName: ticket.cinema?.name || 'N/A',
+      roomName: ticket.room?.name || 'N/A',
+      
+      // Showtime info
+      showtime: ticket.time,
+      showDate: ticket.time?.showDate || ticket.time?.date || ticket.showdate,
+      startTime: ticket.time?.startTime || ticket.time?.time,
+      
+      // Seats info
+      seats: ticket.seats,
+      seatNumbers: ticket.seats?.map(seat => 
+        seat.seatNumber || seat.name || `${seat.row || ''}${seat.column || ''}`
+      ).join(', ') || 'N/A',
+      
+      // Financial info
+      totalAmount: ticket.total,
+      seatTotalPrice: ticket.seatTotalPrice,
+      foodTotalPrice: ticket.foodTotalPrice,
+      discountAmount: ticket.discountAmount,
+      
+      // Status & dates
+      status: ticket.status,
+      createdAt: ticket.bookingTime || ticket.date,
+      confirmedAt: ticket.confirmedAt,
+      cancelledAt: ticket.cancelledAt,
+      
+      // Additional info
+      paymentMethod: ticket.paymentMethod,
+      foodItems: ticket.foodItems,
+      discount: ticket.discount
+    }));
 
     res.status(200).json({
       success: true,
-      count: tickets.length,
-      data: tickets
+      count: transformedTickets.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: transformedTickets
     });
   } catch (err) {
-    console.error(err.message);
+    logError('getTickets Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi lấy danh sách vé',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
-// @desc    Lấy chi tiết vé
+// @desc    Lấy chi tiết vé - IMPROVED
 // @route   GET /api/tickets/:id
 // @access  Private
 exports.getTicket = async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id)
+    const ticketId = req.params.id;
+    logInfo('Getting ticket with ID:', ticketId);
+
+    // ✅ Validate ObjectId
+    if (!ticketId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID vé không hợp lệ'
+      });
+    }
+
+    const ticket = await Ticket.findById(ticketId)
       .populate('user', 'name email number_phone')
-      .populate('seats', 'name price')
+      .populate('seats', 'name price row column seatNumber')
       .populate('movie', 'name duration image genre')
       .populate('cinema', 'name address')
       .populate('room', 'name')
       .populate('foodItems.food', 'name price image')
       .populate('discount', 'name percent')
-      .populate('time', 'time date'); // ✅ FIXED: ShowTime has both time and date fields
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate',
+        populate: {
+          path: 'movie room cinema',
+          select: 'name'
+        }
+      });
 
     if (!ticket) {
+      logError('Ticket not found', { ticketId });
       return res.status(404).json({
         success: false,
         error: 'Không tìm thấy vé'
       });
     }
 
+    logSuccess('Found ticket:', { orderId: ticket.orderId, status: ticket.status });
+
     res.status(200).json({
       success: true,
       data: ticket
     });
   } catch (err) {
-    console.error(err.message);
+    logError('getTicket Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi lấy chi tiết vé',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
 
-// @desc    Tìm vé theo orderId
+// @desc    Tìm vé theo orderId - IMPROVED
 // @route   GET /api/tickets/order/:orderId
 // @access  Public
 exports.getTicketByOrderId = async (req, res) => {
   try {
-    const ticket = await Ticket.findOne({ orderId: req.params.orderId })
+    const { orderId } = req.params;
+    logInfo('Searching ticket by orderId:', orderId);
+
+    const ticket = await Ticket.findOne({ orderId })
       .populate('user', 'name email number_phone')
-      .populate('seats', 'name price')
+      .populate('seats', 'name price row column seatNumber')
       .populate('movie', 'name duration image genre')
       .populate('cinema', 'name address')
       .populate('room', 'name')
       .populate('foodItems.food', 'name price image')
       .populate('discount', 'name percent')
-      .populate('time', 'time');
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate'
+      });
 
     if (!ticket) {
+      logError('Ticket not found by orderId', { orderId });
       return res.status(404).json({
         success: false,
         error: 'Không tìm thấy vé với mã này'
       });
     }
 
+    logSuccess('Found ticket by orderId:', { orderId, status: ticket.status });
+
     res.status(200).json({
       success: true,
       data: ticket
     });
   } catch (err) {
-    console.error(err.message);
+    logError('getTicketByOrderId Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi tìm vé theo mã'
+    });
+  }
+};
+
+// @desc    Lấy vé theo email (for guest users) - IMPROVED
+// @route   GET /api/tickets/email/:email
+// @access  Public
+exports.getTicketsByEmail = async (req, res) => {
+  try {
+    const { email } = req.params;
+    logInfo('Searching tickets for email:', email);
+
+    // ✅ ADD PAGINATION for email search
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const tickets = await Ticket.find({ 'userInfo.email': email })
+      .populate('seats', 'name price row column seatNumber')
+      .populate('movie', 'name image duration genre')
+      .populate('cinema', 'name address')
+      .populate('room', 'name')
+      .populate('foodItems.food', 'name price')
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate'
+      })
+      .sort('-bookingTime')
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Ticket.countDocuments({ 'userInfo.email': email });
+
+    logSuccess(`Found ${tickets.length} tickets for email: ${email} (${total} total)`);
+    
+    if (tickets.length > 0) {
+      logInfo('Sample ticket:', {
+        orderId: tickets[0].orderId,
+        movie: tickets[0].movie?.name,
+        status: tickets[0].status
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      count: tickets.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: tickets
+    });
+  } catch (err) {
+    logError(`getTicketsByEmail Error for ${req.params.email}`, err);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi tìm vé theo email'
+    });
+  }
+};
+
+// @desc    Lấy vé của người dùng hiện tại - IMPROVED
+// @route   GET /api/tickets/mytickets
+// @access  Private
+exports.getMyTickets = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    logInfo('Getting tickets for user:', userId);
+
+    // ✅ ADD PAGINATION
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const tickets = await Ticket.find({ user: userId })
+      .populate('seats', 'name price row column seatNumber')
+      .populate('movie', 'name image duration genre')
+      .populate('cinema', 'name address')
+      .populate('room', 'name')
+      .populate('foodItems.food', 'name price')
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate'
+      })
+      .sort('-bookingTime')
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Ticket.countDocuments({ user: userId });
+
+    logSuccess(`Found ${tickets.length} tickets for user: ${userId} (${total} total)`);
+
+    res.status(200).json({
+      success: true,
+      count: tickets.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: tickets
+    });
+  } catch (err) {
+    logError('getMyTickets Error', err);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi lấy vé của bạn'
+    });
+  }
+};
+
+// @desc    Lấy lịch sử vé của một user (Admin) - IMPROVED
+// @route   GET /api/tickets/user/:userId
+// @access  Private (Admin)
+exports.getTicketsByUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    logInfo('Getting tickets for user ID:', userId);
+    
+    // ✅ ADD PAGINATION
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    // ✅ Validate ObjectId
+    if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        error: 'ID người dùng không hợp lệ'
+      });
+    }
+
+    const tickets = await Ticket.find({ user: userId })
+      .populate('movie', 'name image duration genre')
+      .populate('cinema', 'name address')
+      .populate('room', 'name')
+      .populate('seats', 'name price seatNumber row column')
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate',
+        populate: {
+          path: 'movie room cinema',
+          select: 'name'
+        }
+      })
+      .populate('foodItems.food', 'name price image')
+      .populate('discount', 'name percent')
+      .sort('-bookingTime')
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Ticket.countDocuments({ user: userId });
+
+    // ✅ Transform data for frontend
+    const transformedTickets = tickets.map(ticket => {
+      let seatNumbers = 'N/A';
+      if (ticket.seats && ticket.seats.length > 0) {
+        seatNumbers = ticket.seats.map(seat => {
+          if (seat && typeof seat === 'object') {
+            return seat.seatNumber || seat.name || `${seat.row || ''}${seat.column || ''}` || seat._id?.toString().slice(-3);
+          }
+          return seat?.toString().slice(-3) || 'N/A';
+        }).filter(Boolean).join(', ');
+      }
+
+      return {
+        _id: ticket._id,
+        orderId: ticket.orderId,
+        
+        // Movie info
+        movie: ticket.movie,
+        movieName: ticket.movie?.name || 'N/A',
+        
+        // Cinema & Room info
+        cinema: ticket.cinema,
+        room: ticket.room,
+        cinemaName: ticket.cinema?.name || 'N/A',
+        roomName: ticket.room?.name || 'N/A',
+        
+        // Showtime info
+        showtime: ticket.time,
+        showDate: ticket.time?.showDate || ticket.time?.date || ticket.showdate,
+        startTime: ticket.time?.startTime || ticket.time?.time,
+        
+        // Seats info
+        seats: ticket.seats,
+        seatNumbers: seatNumbers,
+        seatNumber: seatNumbers,
+        
+        // Financial info
+        totalPrice: ticket.total,
+        price: ticket.total,
+        seatTotalPrice: ticket.seatTotalPrice,
+        foodTotalPrice: ticket.foodTotalPrice,
+        discountAmount: ticket.discountAmount,
+        
+        // Status & dates
+        status: ticket.status,
+        createdAt: ticket.bookingTime || ticket.date,
+        confirmedAt: ticket.confirmedAt,
+        cancelledAt: ticket.cancelledAt,
+        
+        // Additional info
+        paymentMethod: ticket.paymentMethod,
+        foodItems: ticket.foodItems,
+        discount: ticket.discount,
+        userInfo: ticket.userInfo,
+        
+        // Legacy support
+        ticketCode: ticket.orderId
+      };
+    });
+
+    logSuccess(`Found ${transformedTickets.length} tickets for user: ${userId} (${total} total)`);
+
+    res.status(200).json({
+      success: true,
+      count: transformedTickets.length,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      data: transformedTickets
+    });
+
+  } catch (err) {
+    logError('getTicketsByUser Error', err);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi lấy lịch sử vé người dùng'
     });
   }
 };
@@ -115,7 +476,7 @@ exports.getTicketByOrderId = async (req, res) => {
 // @access  Private (optional - can work for guests)
 exports.createTicket = async (req, res) => {
   try {
-    console.log('📝 Received booking data:', JSON.stringify(req.body, null, 2));
+    logInfo('Received booking data:', req.body);
 
     // ✅ Handle both old API format and new frontend format
     let ticketData;
@@ -286,7 +647,7 @@ exports.createTicket = async (req, res) => {
       let total_food = 0;
 
       if (food) {
-        const foodItem = await require('../models/foodModel').findById(food);
+        const foodItem = await Food.findById(food);
         if (foodItem) {
           total_food = foodItem.price;
           total += total_food;
@@ -294,7 +655,7 @@ exports.createTicket = async (req, res) => {
       }
 
       if (discount) {
-        const discountItem = await require('../models/discountModel').findById(discount);
+        const discountItem = await Discount.findById(discount);
         if (discountItem && discountItem.status === 'active') {
           const discountAmount = (total * discountItem.percent) / 100;
           total -= discountAmount;
@@ -335,7 +696,7 @@ exports.createTicket = async (req, res) => {
       );
     }
 
-    console.log('💾 Creating ticket with data:', JSON.stringify(ticketData, null, 2));
+    logInfo('Creating ticket with data:', ticketData);
 
     // Create ticket
     const ticket = await Ticket.create(ticketData);
@@ -347,10 +708,17 @@ exports.createTicket = async (req, res) => {
       .populate('room', 'name')
       .populate('seats', 'name price')
       .populate('foodItems.food', 'name price image')
-      .populate('time', 'time date movie room cinema')
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate',
+        populate: {
+          path: 'movie room cinema',
+          select: 'name'
+        }
+      })
       .populate('discount', 'name percent');
 
-    console.log('✅ Ticket created successfully:', ticket.orderId);
+    logSuccess('Ticket created successfully:', ticket.orderId);
 
     // ✅ NEW: Tạo notification cho ticket được tạo
     try {
@@ -363,10 +731,10 @@ exports.createTicket = async (req, res) => {
           currency: 'vnd'
         }, 'ticket_booked');
         
-        console.log('✅ Ticket booking notification created');
+        logSuccess('Ticket booking notification created');
       }
     } catch (notificationError) {
-      console.error('⚠️ Failed to create ticket notification:', notificationError);
+      logError('Failed to create ticket notification', notificationError);
       // Không fail ticket creation nếu notification thất bại
     }
 
@@ -377,69 +745,11 @@ exports.createTicket = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('❌ Create ticket error:', err.message);
+    logError('Create ticket error', err);
     res.status(500).json({
       success: false,
       error: 'Lỗi server khi tạo vé',
-      details: err.message
-    });
-  }
-};
-
-// @desc    Lấy vé của người dùng hiện tại
-// @route   GET /api/tickets/mytickets
-// @access  Private
-exports.getMyTickets = async (req, res) => {
-  try {
-    const tickets = await Ticket.find({ user: req.user.id })
-      .populate('seats', 'name price')
-      .populate('movie', 'name image duration')
-      .populate('cinema', 'name address')
-      .populate('room', 'name')
-      .populate('foodItems.food', 'name price')
-      .populate('time', 'time')
-      .sort('-bookingTime');
-
-    res.status(200).json({
-      success: true,
-      count: tickets.length,
-      data: tickets
-    });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi server'
-    });
-  }
-};
-
-// @desc    Lấy vé theo email (for guest users)
-// @route   GET /api/tickets/email/:email
-// @access  Public
-exports.getTicketsByEmail = async (req, res) => {
-  try {
-    const { email } = req.params;
-    
-    const tickets = await Ticket.find({ 'userInfo.email': email })
-      .populate('seats', 'name price')
-      .populate('movie', 'name image duration')
-      .populate('cinema', 'name address')
-      .populate('room', 'name')
-      .populate('foodItems.food', 'name price')
-      .populate('time', 'time')
-      .sort('-bookingTime');
-
-    res.status(200).json({
-      success: true,
-      count: tickets.length,
-      data: tickets
-    });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi server'
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };
@@ -450,8 +760,11 @@ exports.getTicketsByEmail = async (req, res) => {
 exports.updatePaymentStatus = async (req, res) => {
   try {
     const { status } = req.body;
+    const ticketId = req.params.id;
     
-    const ticket = await Ticket.findById(req.params.id);
+    logInfo('Updating payment status:', { ticketId, status });
+    
+    const ticket = await Ticket.findById(ticketId);
     
     if (!ticket) {
       return res.status(404).json({
@@ -477,21 +790,23 @@ exports.updatePaymentStatus = async (req, res) => {
           currency: 'vnd'
         }, 'payment_success');
         
-        console.log('✅ Payment status update notification created');
+        logSuccess('Payment status update notification created');
       }
     } catch (notificationError) {
-      console.error('⚠️ Failed to create payment status notification:', notificationError);
+      logError('Failed to create payment status notification', notificationError);
     }
+
+    logSuccess('Payment status updated:', { orderId: ticket.orderId, status });
 
     res.status(200).json({
       success: true,
       data: ticket
     });
   } catch (err) {
-    console.error(err.message);
+    logError('updatePaymentStatus Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi cập nhật trạng thái thanh toán'
     });
   }
 };
@@ -501,7 +816,10 @@ exports.updatePaymentStatus = async (req, res) => {
 // @access  Private (Admin)
 exports.updateTicket = async (req, res) => {
   try {
-    let ticket = await Ticket.findById(req.params.id);
+    const ticketId = req.params.id;
+    logInfo('Updating ticket:', { ticketId, updates: req.body });
+    
+    let ticket = await Ticket.findById(ticketId);
 
     if (!ticket) {
       return res.status(404).json({
@@ -510,20 +828,22 @@ exports.updateTicket = async (req, res) => {
       });
     }
 
-    ticket = await Ticket.findByIdAndUpdate(req.params.id, req.body, {
+    ticket = await Ticket.findByIdAndUpdate(ticketId, req.body, {
       new: true,
       runValidators: true
     });
+
+    logSuccess('Ticket updated:', ticket.orderId);
 
     res.status(200).json({
       success: true,
       data: ticket
     });
   } catch (err) {
-    console.error(err.message);
+    logError('updateTicket Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi cập nhật vé'
     });
   }
 };
@@ -533,7 +853,10 @@ exports.updateTicket = async (req, res) => {
 // @access  Private (Admin)
 exports.deleteTicket = async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id);
+    const ticketId = req.params.id;
+    logInfo('Deleting ticket:', ticketId);
+    
+    const ticket = await Ticket.findById(ticketId);
 
     if (!ticket) {
       return res.status(404).json({
@@ -570,30 +893,34 @@ exports.deleteTicket = async (req, res) => {
       );
     }
 
-    await Ticket.findByIdAndDelete(req.params.id);
+    await Ticket.findByIdAndDelete(ticketId);
+
+    logSuccess('Ticket deleted:', ticket.orderId);
 
     res.status(200).json({
       success: true,
       data: {}
     });
   } catch (err) {
-    console.error(err.message);
+    logError('deleteTicket Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server'
+      error: 'Lỗi server khi xóa vé'
     });
   }
 };
 
-// ✅ NEW: Cancel ticket
 // @desc    Hủy vé
 // @route   PUT /api/tickets/:id/cancel
 // @access  Private
 exports.cancelTicket = async (req, res) => {
   try {
     const { reason } = req.body;
+    const ticketId = req.params.id;
     
-    const ticket = await Ticket.findById(req.params.id);
+    logInfo('Cancelling ticket:', { ticketId, reason });
+    
+    const ticket = await Ticket.findById(ticketId);
     
     if (!ticket) {
       return res.status(404).json({
@@ -635,10 +962,10 @@ exports.cancelTicket = async (req, res) => {
           currency: 'vnd'
         }, 'ticket_cancelled');
         
-        console.log('✅ Ticket cancellation notification created');
+        logSuccess('Ticket cancellation notification created');
       }
     } catch (notificationError) {
-      console.error('⚠️ Failed to create cancellation notification:', notificationError);
+      logError('Failed to create cancellation notification', notificationError);
     }
 
     // ✅ Release seats back to available
@@ -669,13 +996,15 @@ exports.cancelTicket = async (req, res) => {
       );
     }
 
+    logSuccess('Ticket cancelled:', ticket.orderId);
+
     res.status(200).json({
       success: true,
       message: 'Vé đã được hủy thành công',
       data: ticket
     });
   } catch (err) {
-    console.error('Cancel ticket error:', err.message);
+    logError('Cancel ticket error', err);
     res.status(500).json({
       success: false,
       error: 'Lỗi server khi hủy vé'
@@ -683,18 +1012,23 @@ exports.cancelTicket = async (req, res) => {
   }
 };
 
-// ✅ NEW: Validate ticket
 // @desc    Xác thực vé (QR scan tại rạp)
 // @route   GET /api/tickets/:id/validate
 // @access  Private (Cinema staff)
 exports.validateTicket = async (req, res) => {
   try {
-    const ticket = await Ticket.findById(req.params.id)
+    const ticketId = req.params.id;
+    logInfo('Validating ticket:', ticketId);
+    
+    const ticket = await Ticket.findById(ticketId)
       .populate('movie', 'name image')
       .populate('cinema', 'name address')
       .populate('room', 'name')
       .populate('seats', 'name')
-      .populate('time', 'time date');
+      .populate({
+        path: 'time',
+        select: 'time date startTime showDate'
+      });
     
     if (!ticket) {
       return res.status(404).json({
@@ -724,8 +1058,9 @@ exports.validateTicket = async (req, res) => {
     }
 
     // Check if showtime has passed (optional warning)
-    if (ticket.time && ticket.time.time) {
-      const showtimeDate = new Date(ticket.time.time);
+    if (ticket.time && (ticket.time.time || ticket.time.startTime)) {
+      const showtimeStr = ticket.time.startTime || ticket.time.time;
+      const showtimeDate = new Date(showtimeStr);
       const now = new Date();
       
       if (showtimeDate < now) {
@@ -734,8 +1069,9 @@ exports.validateTicket = async (req, res) => {
     }
 
     // Check if it's too early (more than 30 minutes before showtime)
-    if (ticket.time && ticket.time.time) {
-      const showtimeDate = new Date(ticket.time.time);
+    if (ticket.time && (ticket.time.time || ticket.time.startTime)) {
+      const showtimeStr = ticket.time.startTime || ticket.time.time;
+      const showtimeDate = new Date(showtimeStr);
       const now = new Date();
       const timeDiff = showtimeDate.getTime() - now.getTime();
       const minutesDiff = timeDiff / (1000 * 60);
@@ -744,6 +1080,12 @@ exports.validateTicket = async (req, res) => {
         validationResult.warnings.push('Còn quá sớm để vào rạp');
       }
     }
+
+    logInfo('Ticket validation result:', { 
+      orderId: ticket.orderId, 
+      valid: validationResult.valid,
+      status: ticket.status 
+    });
 
     res.status(200).json({
       success: true,
@@ -755,14 +1097,14 @@ exports.validateTicket = async (req, res) => {
           cinema: ticket.cinema?.name,
           room: ticket.room?.name,
           seats: ticket.seats?.map(seat => seat.name).join(', '),
-          showtime: ticket.time?.time,
+          showtime: ticket.time?.startTime || ticket.time?.time,
           status: ticket.status,
           customerName: ticket.userInfo?.fullName
         }
       }
     });
   } catch (err) {
-    console.error('Validate ticket error:', err.message);
+    logError('Validate ticket error', err);
     res.status(500).json({
       success: false,
       valid: false,
@@ -770,122 +1112,164 @@ exports.validateTicket = async (req, res) => {
     });
   }
 };
-// @desc    Lấy lịch sử vé của một user (Admin)
-// @route   GET /api/tickets/user/:userId
-// @access  Private (Admin)
-// @desc    Lấy lịch sử vé của một user (Admin)
-// @route   GET /api/tickets/user/:userId
-// @access  Private (Admin)
-exports.getTicketsByUser = async (req, res) => {
+
+// ============ DEBUG & UTILITY CONTROLLERS ============
+
+// @desc    Debug tickets - Kiểm tra database
+// @route   GET /api/tickets/debug
+// @access  Public (for debugging)
+exports.debugTickets = async (req, res) => {
   try {
-    console.log('=== GET TICKETS BY USER START ===');
-    console.log('User ID:', req.params.userId);
+    logInfo('DEBUG TICKETS START');
     
-    const { userId } = req.params;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
-    const skip = (page - 1) * limit;
+    const totalTickets = await Ticket.countDocuments();
+    logInfo(`Total tickets in DB: ${totalTickets}`);
+    
+    const sampleTickets = await Ticket.find().limit(3).lean();
+    logInfo('Sample tickets:', sampleTickets.map(t => ({
+      id: t._id,
+      orderId: t.orderId,
+      email: t.userInfo?.email,
+      movie: t.movie,
+      status: t.status,
+      createdAt: t.bookingTime
+    })));
+    
+    const emailTickets = await Ticket.find({'userInfo.email': {$exists: true}}).limit(5);
+    logInfo('Email tickets:', emailTickets.map(t => t.userInfo?.email));
+    
+    // Check ShowTime reference
+    const showtimeTickets = await Ticket.find({time: {$exists: true}})
+      .populate('time')
+      .limit(3);
+    logInfo('Showtime data:', showtimeTickets.map(t => ({
+      ticketId: t._id,
+      showtimeId: t.time?._id,
+      showtimeData: t.time
+    })));
 
-    // Validate ObjectId
-    if (!userId.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        success: false,
-        error: 'ID người dùng không hợp lệ'
-      });
-    }
+    // Check different status counts
+    const statusCounts = await Ticket.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
 
-    // Query tickets với populate
-    const tickets = await Ticket.find({ user: userId })
-      .populate('movie', 'name image duration genre')
-      .populate('cinema', 'name address')
-      .populate('room', 'name')
-      .populate('seats', 'name price seatNumber row column')
-      .populate('time', 'time date movie room cinema')
-      .populate('foodItems.food', 'name price image')
-      .populate('discount', 'name percent')
-      .sort({ bookingTime: -1 })
-      .skip(skip)
-      .limit(limit);
+    // Check email distribution
+    const emailCounts = await Ticket.aggregate([
+      { $group: { _id: '$userInfo.email', count: { $sum: 1 } } },
+      { $limit: 10 }
+    ]);
 
-    const total = await Ticket.countDocuments({ user: userId });
-
-    // Transform data for frontend
-    const transformedTickets = tickets.map(ticket => {
-      // Xử lý seats an toàn
-      let seatNumbers = 'N/A';
-      if (ticket.seats && ticket.seats.length > 0) {
-        seatNumbers = ticket.seats.map(seat => {
-          // Nếu seat đã được populate
-          if (seat && typeof seat === 'object') {
-            return seat.seatNumber || seat.name || `${seat.row || ''}${seat.column || ''}` || seat._id?.toString().slice(-3);
-          }
-          // Nếu seat chỉ là string ID
-          return seat?.toString().slice(-3) || 'N/A';
-        }).filter(Boolean).join(', ');
+    res.json({
+      success: true,
+      debug: {
+        totalTickets,
+        sampleTickets: sampleTickets.length,
+        emailTickets: emailTickets.length,
+        showtimeTickets: showtimeTickets.length,
+        statusDistribution: statusCounts,
+        topEmails: emailCounts.map(e => ({ email: e._id, count: e.count })),
+        sampleData: {
+          tickets: sampleTickets.map(t => ({
+            orderId: t.orderId,
+            email: t.userInfo?.email,
+            status: t.status,
+            movie: t.movie,
+            total: t.total
+          })),
+          showtimes: showtimeTickets.map(t => ({
+            ticketId: t._id,
+            showtimeFields: t.time ? Object.keys(t.time.toObject()) : 'not populated'
+          }))
+        }
       }
-
-      return {
-        _id: ticket._id,
-        orderId: ticket.orderId,
-        
-        // Movie info
-        movie: ticket.movie,
-        movieName: ticket.movie?.name || 'N/A',
-        
-        // Cinema & Room info
-        cinema: ticket.cinema,
-        room: ticket.room,
-        cinemaName: ticket.cinema?.name || 'N/A',
-        roomName: ticket.room?.name || 'N/A',
-        
-        // Showtime info
-        showtime: ticket.time,
-        showDate: ticket.time?.date || ticket.showdate,
-        showTime: ticket.time?.time,
-        
-        // Seats info - FIXED
-        seats: ticket.seats,
-        seatNumbers: seatNumbers, // Đã xử lý an toàn
-        seatNumber: seatNumbers,  // Alias cho tương thích
-        
-        // Pricing
-        totalPrice: ticket.total,
-        price: ticket.total,
-        seatTotalPrice: ticket.seatTotalPrice,
-        foodTotalPrice: ticket.foodTotalPrice,
-        discountAmount: ticket.discountAmount,
-        
-        // Status & dates
-        status: ticket.status,
-        createdAt: ticket.bookingTime || ticket.date,
-        confirmedAt: ticket.confirmedAt,
-        cancelledAt: ticket.cancelledAt,
-        
-        // Additional info
-        paymentMethod: ticket.paymentMethod,
-        foodItems: ticket.foodItems,
-        discount: ticket.discount,
-        userInfo: ticket.userInfo,
-        
-        // Legacy support
-        ticketCode: ticket.orderId
-      };
     });
+  } catch (err) {
+    logError('Debug error', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
+// @desc    Thống kê vé
+// @route   GET /api/tickets/stats
+// @access  Private (Admin)
+exports.getTicketStats = async (req, res) => {
+  try {
+    logInfo('Getting ticket statistics');
+
+    const stats = await Promise.all([
+      // Total tickets
+      Ticket.countDocuments(),
+      
+      // Tickets by status
+      Ticket.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      
+      // Revenue by day (last 30 days)
+      Ticket.aggregate([
+        {
+          $match: {
+            status: 'completed',
+            bookingTime: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: '%Y-%m-%d', date: '$bookingTime' } },
+            revenue: { $sum: '$total' },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]),
+      
+      // Top movies
+      Ticket.aggregate([
+        { $match: { status: 'completed' } },
+        {
+          $lookup: {
+            from: 'movies',
+            localField: 'movie',
+            foreignField: '_id',
+            as: 'movieData'
+          }
+        },
+        { $unwind: '$movieData' },
+        {
+          $group: {
+            _id: '$movie',
+            movieName: { $first: '$movieData.name' },
+            ticketCount: { $sum: 1 },
+            revenue: { $sum: '$total' }
+          }
+        },
+        { $sort: { ticketCount: -1 } },
+        { $limit: 5 }
+      ])
+    ]);
+
+    const [totalTickets, statusCounts, dailyRevenue, topMovies] = stats;
+
+    logSuccess('Statistics generated successfully');
 
     res.status(200).json({
       success: true,
-      count: transformedTickets.length,
-      total,
-      page,
-      pages: Math.ceil(total / limit),
-      data: transformedTickets
+      data: {
+        totalTickets,
+        statusDistribution: statusCounts,
+        dailyRevenue,
+        topMovies,
+        generatedAt: new Date()
+      }
     });
-
   } catch (err) {
-    console.error('Get tickets by user error:', err);
+    logError('getTicketStats Error', err);
     res.status(500).json({
       success: false,
-      error: 'Lỗi server khi lấy lịch sử vé'
+      error: 'Lỗi server khi lấy thống kê'
     });
   }
 };
