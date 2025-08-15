@@ -1273,3 +1273,160 @@ exports.getTicketStats = async (req, res) => {
     });
   }
 };
+// @desc    Lấy vé theo suất chiếu cụ thể
+// @route   GET /api/tickets/showtime/:showtimeId
+// @access  Private (Admin)
+exports.getTicketsByShowtime = async (req, res) => {
+  try {
+    const { showtimeId } = req.params;
+    logInfo('Getting tickets for showtime:', showtimeId);
+
+    const tickets = await Ticket.find({ 
+      time: showtimeId,
+      status: { $in: ['completed', 'pending_payment', 'cancelled'] }
+    })
+      .populate('seats', 'name price row column seatNumber')
+      .populate('userInfo')
+      .populate('movie', 'name image duration')
+      .populate('cinema', 'name address')
+      .populate('room', 'name')
+      .populate({
+        path: 'time',
+        select: 'time date',
+        populate: {
+          path: 'movie',
+          select: 'name'
+        }
+      })
+      .sort('-bookingTime');
+
+    const transformedTickets = tickets.map(ticket => ({
+      _id: ticket._id,
+      orderId: ticket.orderId,
+      customerName: ticket.userInfo?.fullName || 'N/A',
+      customerEmail: ticket.userInfo?.email || 'N/A',
+      customerPhone: ticket.userInfo?.phone || 'N/A',
+      seats: ticket.seats,
+      seatNames: ticket.seats?.map(seat => seat.name).join(', ') || 'N/A',
+      seatCount: ticket.seats?.length || 0,
+      movie: ticket.movie,
+      showtime: ticket.time,
+      cinema: ticket.cinema,
+      room: ticket.room,
+      totalAmount: ticket.total,
+      status: ticket.status,
+      paymentMethod: ticket.paymentMethod,
+      bookingTime: ticket.bookingTime,
+      confirmedAt: ticket.confirmedAt,
+      cancelledAt: ticket.cancelledAt
+    }));
+
+    logSuccess(`Found ${transformedTickets.length} tickets for showtime: ${showtimeId}`);
+
+    res.status(200).json({
+      success: true,
+      count: transformedTickets.length,
+      data: transformedTickets
+    });
+  } catch (err) {
+    logError('getTicketsByShowtime Error', err);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi lấy vé theo suất chiếu'
+    });
+  }
+};
+
+// @desc    Lấy trạng thái booking của ghế trong suất chiếu
+// @route   GET /api/tickets/seat-status/:showtimeId  
+// @access  Private (Admin)
+exports.getSeatBookingStatus = async (req, res) => {
+  try {
+    const { showtimeId } = req.params;
+    logInfo('Getting seat booking status for showtime:', showtimeId);
+
+    // Lấy từ SeatStatus model
+    const seatStatuses = await SeatStatus.find({ 
+      showtime: showtimeId 
+    })
+      .populate('seat', 'name price')
+      .populate('room', 'name');
+
+    // Lấy thông tin booking từ Tickets
+    const tickets = await Ticket.find({ 
+      time: showtimeId,
+      status: { $in: ['completed', 'pending_payment'] }
+    })
+      .populate('seats', 'name')
+      .populate('userInfo');
+
+    // Combine cả 2 sources
+    const seatBookingMap = {};
+    let totalBooked = 0;
+    let confirmedBookings = 0;
+    let pendingBookings = 0;
+
+    // Process SeatStatus data
+    seatStatuses.forEach(seatStatus => {
+      if (seatStatus.status === 'booked' || seatStatus.status === 'reserved') {
+        seatBookingMap[seatStatus.seat._id] = {
+          status: seatStatus.status === 'booked' ? 'booked' : 'reserved',
+          seatName: seatStatus.seat.name,
+          seatPrice: seatStatus.seat.price,
+          ticketId: null,
+          orderId: null,
+          customerName: null,
+          customerPhone: null,
+          customerEmail: null,
+          bookingTime: null
+        };
+        totalBooked++;
+      }
+    });
+
+    // Enhance với ticket data
+    tickets.forEach(ticket => {
+      ticket.seats.forEach(seat => {
+        if (seatBookingMap[seat._id]) {
+          seatBookingMap[seat._id] = {
+            ...seatBookingMap[seat._id],
+            status: ticket.status === 'completed' ? 'booked' : 'pending',
+            ticketId: ticket._id,
+            orderId: ticket.orderId,
+            customerName: ticket.userInfo?.fullName,
+            customerPhone: ticket.userInfo?.phone,
+            customerEmail: ticket.userInfo?.email,
+            bookingTime: ticket.bookingTime
+          };
+          
+          if (ticket.status === 'completed') {
+            confirmedBookings++;
+          } else {
+            pendingBookings++;
+          }
+        }
+      });
+    });
+
+    logSuccess(`Seat status retrieved: ${totalBooked} booked seats for showtime ${showtimeId}`);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        showtimeId,
+        seatStatus: seatBookingMap,
+        statistics: {
+          totalBooked,
+          confirmedBookings,
+          pendingBookings
+        }
+      }
+    });
+  } catch (err) {
+    logError('getSeatBookingStatus Error', err);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi lấy trạng thái ghế'
+    });
+  }
+};

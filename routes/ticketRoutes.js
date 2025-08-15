@@ -15,8 +15,10 @@ const {
   updatePaymentStatus,
   cancelTicket,
   validateTicket,
-  debugTickets,      // ✅ NEW: Debug endpoint
-  getTicketStats     // ✅ NEW: Statistics endpoint
+  debugTickets,
+  getTicketStats,
+  getTicketsByShowtime,        // ✅ THÊM DÒNG NÀY
+  getSeatBookingStatus         // ✅ THÊM DÒNG NÀY
 } = require('../controllers/ticketController');
 
 // ============ PUBLIC ROUTES (No Authentication Required) ============
@@ -51,7 +53,11 @@ router.route('/:id/validate').get(validateTicket);
 // ============ ADMIN ROUTES (Admin Authorization Required) ============
 router.use(authorize('admin'));
 
-// ✅ Admin-only endpoints
+// ✅ NEW: Booking status routes
+router.route('/showtime/:showtimeId').get(getTicketsByShowtime);
+router.route('/seat-status/:showtimeId').get(getSeatBookingStatus);
+
+// ✅ Admin-only endpoints  
 router.route('/').get(getTickets);                    // Get all tickets with pagination
 router.route('/stats').get(getTicketStats);          // Get ticket statistics
 router.route('/user/:userId').get(getTicketsByUser); // Get tickets by specific user
