@@ -9,7 +9,8 @@ const {
   createRoom,
   updateRoom,
   deleteRoom,
-  getRoomsByCinema
+  getRoomsByCinema,
+  getRoomsByStatus
 } = require('../controllers/roomController');
 
 // @route   GET /api/rooms
@@ -41,5 +42,7 @@ router.put('/:id', updateRoom);
 // @desc    Xóa phòng chiếu
 // @access  Private (Admin)
 router.delete('/:id', deleteRoom);
+// Thêm vào roomRoutes.js
+router.get('/status/:status', getRoomsByStatus);
 
 module.exports = router;

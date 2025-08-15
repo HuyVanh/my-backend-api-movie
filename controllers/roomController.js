@@ -71,6 +71,9 @@ exports.getRoom = async (req, res) => {
 // @desc    Tạo phòng chiếu mới
 // @route   POST /api/rooms
 // @access  Private (Admin)
+// @desc    Tạo phòng chiếu mới
+// @route   POST /api/rooms
+// @access  Private (Admin)
 exports.createRoom = async (req, res) => {
   try {
     // Kiểm tra cinema có tồn tại không
@@ -79,6 +82,19 @@ exports.createRoom = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Cinema không tồn tại'
+      });
+    }
+
+    // Kiểm tra tên phòng đã tồn tại trong cùng rạp chưa
+    const existingRoom = await Room.findOne({
+      cinema: req.body.cinema,
+      name: { $regex: new RegExp(`^${req.body.name}$`, 'i') } // Case insensitive
+    });
+
+    if (existingRoom) {
+      return res.status(400).json({
+        success: false,
+        error: `Phòng "${req.body.name}" đã tồn tại trong rạp này`
       });
     }
 
@@ -100,6 +116,14 @@ exports.createRoom = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: messages
+      });
+    }
+
+    // Duplicate key error
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tên phòng đã tồn tại trong rạp này'
       });
     }
 
@@ -135,6 +159,25 @@ exports.updateRoom = async (req, res) => {
       }
     }
 
+    // Kiểm tra tên phòng đã tồn tại trong cùng rạp chưa (nếu có cập nhật name hoặc cinema)
+    if (req.body.name || req.body.cinema) {
+      const checkName = req.body.name || room.name;
+      const checkCinema = req.body.cinema || room.cinema;
+      
+      const existingRoom = await Room.findOne({
+        _id: { $ne: req.params.id }, // Loại trừ chính nó
+        cinema: checkCinema,
+        name: { $regex: new RegExp(`^${checkName}$`, 'i') }
+      });
+
+      if (existingRoom) {
+        return res.status(400).json({
+          success: false,
+          error: `Phòng "${checkName}" đã tồn tại trong rạp này`
+        });
+      }
+    }
+
     room = await Room.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true
@@ -156,6 +199,45 @@ exports.updateRoom = async (req, res) => {
       });
     }
 
+    // Duplicate key error
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: 'Tên phòng đã tồn tại trong rạp này'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};
+// @desc    Lấy phòng chiếu theo trạng thái
+// @route   GET /api/rooms/status/:status
+// @access  Public
+exports.getRoomsByStatus = async (req, res) => {
+  try {
+    const { status } = req.params;
+    
+    if (!['active', 'maintenance', 'inactive'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Trạng thái không hợp lệ'
+      });
+    }
+
+    const rooms = await Room.find({ status })
+      .populate('cinema', 'name address')
+      .sort({ cinema: 1, name: 1 });
+
+    res.status(200).json({
+      success: true,
+      count: rooms.length,
+      data: rooms
+    });
+  } catch (err) {
+    console.error(err.message);
     res.status(500).json({
       success: false,
       error: 'Lỗi server'
