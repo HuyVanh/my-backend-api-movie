@@ -1,3 +1,4 @@
+// models/discountModel.js
 const mongoose = require('mongoose');
 
 const DiscountSchema = new mongoose.Schema({
@@ -19,10 +20,10 @@ const DiscountSchema = new mongoose.Schema({
     enum: ['movie', 'ticket', 'food', 'combo'],
     default: 'ticket'
   },
-  cinema: {
+  cinema: [{ 
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Cinema'
-  },
+  }],
   dayStart: {
     type: Date,
     required: [true, 'Vui lòng nhập ngày bắt đầu']

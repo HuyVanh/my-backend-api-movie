@@ -34,7 +34,7 @@ exports.getShowtimes = async (req, res) => {
 
     const showtimes = await ShowTime.find(query)
       .populate('movie', 'name duration genre image')
-      .populate('room', 'name')
+      .populate('room', 'name status')
       .populate('cinema', 'name address')
       .sort('date time')
       .limit(limit * 1)
@@ -66,7 +66,7 @@ exports.getShowtime = async (req, res) => {
   try {
     const showtime = await ShowTime.findById(req.params.id)
       .populate('movie', 'name duration genre image storyLine')
-      .populate('room', 'name')
+      .populate('room', 'name status')
       .populate('cinema', 'name address hotline');
 
     if (!showtime) {
@@ -438,7 +438,7 @@ exports.getShowtimesByMovie = async (req, res) => {
     const showtimes = await ShowTime.find(query)
       .populate('movie', 'name duration genre image')
       .populate('cinema', 'name address')
-      .populate('room', 'name')
+      .populate('room', 'name status')
       .sort('date time');
 
     console.log('Final query result:', showtimes.length);
@@ -480,7 +480,7 @@ exports.getShowtimesByRoom = async (req, res) => {
 
     const showtimes = await ShowTime.find(query)
       .populate('movie', 'name duration genre image')
-      .populate('room', 'name')
+      .populate('room', 'name status')
       .populate('cinema', 'name address')
       .sort('date time');
 
@@ -579,7 +579,7 @@ exports.getShowtimesByDate = async (req, res) => {
     const showtimes = await ShowTime.find(finalQuery)
       .populate('movie', 'name duration genre image')
       .populate('cinema', 'name address')
-      .populate('room', 'name')
+      .populate('room', 'name status')
       .sort('time');
 
     console.log('Final showtimes found:', showtimes.length);

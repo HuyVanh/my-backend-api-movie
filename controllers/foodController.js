@@ -156,3 +156,78 @@ exports.uploadFoodImage = async (req, res) => {
     });
   }
 };
+// THÊM 2 functions này vào cuối file foodController.js hiện tại của bạn
+
+// @desc    Lấy TẤT CẢ đồ ăn/uống (cả available và unavailable) - ADMIN ONLY
+// @route   GET /api/foods/admin/all
+// @access  Private (Admin)
+exports.getAllFoods = async (req, res) => {
+  try {
+    const foods = await Food.find({});
+
+    const availableCount = foods.filter(food => food.status === 'available').length;
+    const unavailableCount = foods.filter(food => food.status === 'unavailable').length;
+
+    res.status(200).json({
+      success: true,
+      count: foods.length,
+      data: foods,
+      summary: {
+        total: foods.length,
+        available: availableCount,
+        unavailable: unavailableCount
+      }
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};
+
+// @desc    Cập nhật STATUS đồ ăn/uống (available/unavailable)
+// @route   PUT /api/foods/:id/status
+// @access  Private (Admin)
+exports.updateFoodStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!status || !['available', 'unavailable'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Trạng thái phải là "available" hoặc "unavailable"'
+      });
+    }
+
+    let food = await Food.findById(req.params.id);
+
+    if (!food) {
+      return res.status(404).json({
+        success: false,
+        error: 'Không tìm thấy sản phẩm'
+      });
+    }
+
+    food = await Food.findByIdAndUpdate(
+      req.params.id, 
+      { status }, 
+      { new: true, runValidators: true }
+    );
+
+    const statusText = status === 'available' ? 'kích hoạt (hiển thị trên app)' : 'vô hiệu hóa (ẩn khỏi app)';
+
+    res.status(200).json({
+      success: true,
+      data: food,
+      message: `Đã ${statusText} món ăn "${food.name}"`
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};

@@ -3,6 +3,9 @@ const Discount = require('../models/discountModel');
 // @desc    Lấy tất cả mã giảm giá
 // @route   GET /api/discounts
 // @access  Public
+// controllers/discountController.js
+
+// Sửa getDiscounts để populate array
 exports.getDiscounts = async (req, res) => {
   try {
     const currentDate = new Date();
@@ -10,7 +13,7 @@ exports.getDiscounts = async (req, res) => {
       status: 'active',
       dayStart: { $lte: currentDate },
       dayEnd: { $gte: currentDate }
-    }).populate('cinema', 'name');
+    }).populate('cinema', 'name'); // ✅ Vẫn populate như cũ, MongoDB tự handle array
 
     res.status(200).json({
       success: true,
@@ -25,6 +28,8 @@ exports.getDiscounts = async (req, res) => {
     });
   }
 };
+
+// Các method khác giữ nguyên, chỉ cần populate('cinema', 'name')
 
 // @desc    Lấy chi tiết mã giảm giá
 // @route   GET /api/discounts/:id
@@ -157,6 +162,24 @@ exports.deleteDiscount = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {}
+    });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};
+// Thêm vào discountController.js
+exports.getAllDiscountsForAdmin = async (req, res) => {
+  try {
+    const discounts = await Discount.find({}).populate('cinema', 'name');
+
+    res.status(200).json({
+      success: true,
+      count: discounts.length,
+      data: discounts
     });
   } catch (err) {
     console.error(err.message);

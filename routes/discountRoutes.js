@@ -9,7 +9,8 @@ const {
   createDiscount,
   updateDiscount,
   deleteDiscount,
-  verifyDiscount
+  verifyDiscount,
+  getAllDiscountsForAdmin
 } = require('../controllers/discountController');
 
 // Routes công khai
@@ -21,6 +22,7 @@ router.route('/verify/:code').get(verifyDiscount);
 router.use(protect);
 router.use(authorize('admin'));
 
+router.route('/admin/all').get(getAllDiscountsForAdmin);
 router.route('/').post(createDiscount);
 router.route('/:id')
   .put(updateDiscount)

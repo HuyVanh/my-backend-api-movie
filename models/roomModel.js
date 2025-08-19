@@ -16,7 +16,7 @@ const RoomSchema = new mongoose.Schema({
     default: 'active'
   }
 }, {
-  timestamps: true // Thêm createdAt và updatedAt
+  timestamps: true 
 });
 
 // Index để tối ưu query
