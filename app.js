@@ -42,6 +42,7 @@ app.use('/api/genres', require('./routes/genreRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/seat-status', require('./routes/seatStatusRoutes'));
 app.use('/api/employees', require('./routes/employeeRoutes'));
+app.use('/api/statistics', require('./routes/statisticsRoutes'));
 
 // API chính
 app.get('/', (req, res) => {

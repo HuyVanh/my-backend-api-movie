@@ -15,6 +15,79 @@ exports.getMovies = async (req, res) => {
     const removeFields = ['select', 'sort', 'page', 'limit'];
     removeFields.forEach(param => delete reqQuery[param]);
 
+    // ✅ THÊM FILTER CHỈ LẤY PHIM ACTIVE
+    reqQuery.status = 'active'; // Chỉ lấy phim đang chiếu
+
+    let queryStr = JSON.stringify(reqQuery);
+    queryStr = queryStr.replace(/\b(gt|gte|lt|lte|in)\b/g, match => `$${match}`);
+
+    query = Movie.find(JSON.parse(queryStr))
+      .populate('director', 'name')
+      .populate('actor', 'name')
+      .populate('genre', 'name');
+
+    // Select Fields
+    if (req.query.select) {
+      const fields = req.query.select.split(',').join(' ');
+      query = query.select(fields);
+    }
+
+    // Sort
+    if (req.query.sort) {
+      const sortBy = req.query.sort.split(',').join(' ');
+      query = query.sort(sortBy);
+    } else {
+      query = query.sort('-release_date');
+    }
+
+    // Pagination
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 25;
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+    
+    // ✅ SỬA: Đếm theo điều kiện có status = 'active'
+    const total = await Movie.countDocuments({ status: 'active' });
+
+    query = query.skip(startIndex).limit(limit);
+
+    const movies = await query;
+
+    const pagination = {};
+    if (endIndex < total) {
+      pagination.next = { page: page + 1, limit };
+    }
+    if (startIndex > 0) {
+      pagination.prev = { page: page - 1, limit };
+    }
+
+    res.status(200).json({
+      success: true,
+      count: movies.length,
+      pagination,
+      data: movies
+    });
+  } catch (err) {
+    console.error('Error in getMovies:', err.message);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server'
+    });
+  }
+};
+// ✅ THÊM METHOD MỊI: Lấy tất cả phim cho Admin (bao gồm cả inactive)
+// @desc    Lấy tất cả phim cho Admin
+// @route   GET /api/movies/admin/all  
+// @access  Private (Admin)
+exports.getAllMoviesForAdmin = async (req, res) => {
+  try {
+    let query;
+    const reqQuery = { ...req.query };
+    const removeFields = ['select', 'sort', 'page', 'limit'];
+    removeFields.forEach(param => delete reqQuery[param]);
+
+    // ✅ KHÔNG FILTER theo status - lấy tất cả phim
+
     let queryStr = JSON.stringify(reqQuery);
     queryStr = queryStr.replace(/\b(gt|gte|lt|lte|in)\b/g, match => `$${match}`);
 
@@ -48,6 +121,13 @@ exports.getMovies = async (req, res) => {
 
     const movies = await query;
 
+    // ✅ THÊM THỐNG KÊ CHO ADMIN
+    const statistics = {
+      total: movies.length,
+      active: movies.filter(m => m.status === 'active').length,
+      inactive: movies.filter(m => m.status === 'inactive').length
+    };
+
     const pagination = {};
     if (endIndex < total) {
       pagination.next = { page: page + 1, limit };
@@ -60,10 +140,11 @@ exports.getMovies = async (req, res) => {
       success: true,
       count: movies.length,
       pagination,
+      statistics,
       data: movies
     });
   } catch (err) {
-    console.error('Error in getMovies:', err.message);
+    console.error('Error in getAllMoviesForAdmin:', err.message);
     res.status(500).json({
       success: false,
       error: 'Lỗi server'

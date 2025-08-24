@@ -73,6 +73,13 @@ const movieSchema = new mongoose.Schema({
   release_at: {
     type: String,
     trim: true 
+  },
+   // ✅ THÊM FIELD STATUS
+  status: {
+    type: String,
+    enum: ['active', 'inactive'],
+    default: 'active',
+    required: true
   }
 }, {
   timestamps: true, // Tự động tạo createdAt và updatedAt
@@ -87,6 +94,9 @@ movieSchema.index({ rate: -1 });
 movieSchema.index({ genre: 1 });
 movieSchema.index({ director: 1 });
 movieSchema.index({ actor: 1 });
+
+// ✅ THÊM INDEX cho status
+movieSchema.index({ status: 1 });
 
 // ✨ THÊM MỚI: Virtual fields để hiển thị tên đầy đủ
 movieSchema.virtual('directorNames').get(function() {
