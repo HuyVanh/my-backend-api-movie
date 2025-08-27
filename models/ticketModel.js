@@ -50,10 +50,9 @@ const TicketSchema = new mongoose.Schema({
     required: true,
   },
 
-  // ✅ Showtime info - FIXED reference
   time: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "ShowTime", // ✅ CORRECTED: Should reference ShowTime, not Time
+    ref: "ShowTime", 
     required: true,
   },
 
@@ -145,6 +144,9 @@ const TicketSchema = new mongoose.Schema({
   confirmedAt: {
     type: Date,
   },
+  usedAt: {
+  type: Date,
+},
 
   // ✅ Legacy fields (keep for compatibility)
   date: {

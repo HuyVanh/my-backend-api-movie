@@ -17,24 +17,23 @@ const {
   validateTicket,
   debugTickets,
   getTicketStats,
-  getTicketsByShowtime,        // ✅ THÊM DÒNG NÀY
-  getSeatBookingStatus         // ✅ THÊM DÒNG NÀY
+  getTicketsByShowtime,        
+  getSeatBookingStatus,
+  scanTicket,
+  getScanHistory
 } = require('../controllers/ticketController');
 
-// ============ PUBLIC ROUTES (No Authentication Required) ============
-
-// ✅ Debug endpoint - Should be FIRST for easy access
 router.route('/debug').get(debugTickets);
 
 // ✅ Public search routes
 router.route('/order/:orderId').get(getTicketByOrderId);
 router.route('/email/:email').get(getTicketsByEmail);
-
-// ============ PROTECTED ROUTES (Authentication Required) ============
 router.use(protect);
 
 // ✅ User's own tickets
 router.route('/mytickets').get(getMyTickets);
+router.route('/scan').post(scanTicket);
+router.route('/scan-history').get(getScanHistory);
 
 // ✅ Ticket creation
 router.route('/').post(createTicket);
@@ -49,6 +48,7 @@ router.route('/:id')
 router.route('/:id/payment').put(updatePaymentStatus);
 router.route('/:id/cancel').put(cancelTicket);
 router.route('/:id/validate').get(validateTicket);
+
 
 // ============ ADMIN ROUTES (Admin Authorization Required) ============
 router.use(authorize('admin'));

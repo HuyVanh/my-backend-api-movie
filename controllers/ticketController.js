@@ -1430,3 +1430,186 @@ exports.getSeatBookingStatus = async (req, res) => {
     });
   }
 };
+// @desc    Quét mã QR để validate vé
+// @route   POST /api/tickets/scan
+// @access  Private (Staff)
+exports.scanTicket = async (req, res) => {
+  try {
+    const { qrData } = req.body;
+    logInfo('Scanning QR:', qrData);
+    
+    let ticketQuery;
+    try {
+      const parsed = JSON.parse(qrData);
+      ticketQuery = { orderId: parsed.ticketId };
+    } catch {
+      ticketQuery = { orderId: qrData };
+    }
+    
+    const ticket = await Ticket.findOne(ticketQuery)
+      .populate('movie', 'name')
+      .populate('cinema', 'name') 
+      .populate('room', 'name')
+      .populate('seats', 'name seatNumber');
+    
+    if (!ticket) {
+      return res.json({
+        success: false,
+        valid: false,
+        message: 'Vé không tồn tại'
+      });
+    }
+    
+    if (ticket.status === 'used') {
+      return res.json({
+        success: false,
+        valid: false, 
+        message: 'Vé đã được sử dụng'
+      });
+    }
+    
+    if (ticket.status !== 'completed') {
+      return res.json({
+        success: false,
+        valid: false,
+        message: 'Vé chưa thanh toán'
+      });
+    }
+    
+    // ✅ FIX: Lưu cả status VÀ usedAt
+    ticket.status = 'used';
+    ticket.usedAt = new Date();
+    
+    const savedTicket = await ticket.save();
+    
+    // Debug log
+    logSuccess('Ticket marked as used:', {
+      orderId: savedTicket.orderId,
+      status: savedTicket.status,
+      usedAt: savedTicket.usedAt
+    });
+    
+    res.json({
+      success: true,
+      valid: true,
+      message: 'Check-in thành công',
+      data: {
+        orderId: ticket.orderId,
+        movieName: ticket.movie?.name,
+        cinemaName: ticket.cinema?.name,
+        customerName: ticket.userInfo?.fullName
+      }
+    });
+    
+  } catch (error) {
+    logError('Scan error', error);
+    res.status(500).json({
+      success: false,
+      valid: false,
+      message: 'Lỗi server'
+    });
+  }
+};
+// @desc    Lấy lịch sử quét vé (các vé đã được scan)
+// @route   GET /api/tickets/scan-history
+// @access  Private (Staff)
+exports.getScanHistory = async (req, res) => {
+ try {
+   logInfo('Getting scan history');
+   
+   const { page = 1, limit = 50 } = req.query;
+   const skip = (page - 1) * limit;
+   
+   // Debug: Kiểm tra tất cả vé trước
+   const allTicketsCount = await Ticket.countDocuments();
+   const usedTicketsCount = await Ticket.countDocuments({ status: 'used' });
+   const usedWithTimeCount = await Ticket.countDocuments({ 
+     status: 'used', 
+     usedAt: { $exists: true } 
+   });
+   
+   logInfo('Debug counts:', {
+     totalTickets: allTicketsCount,
+     usedTickets: usedTicketsCount,
+     usedWithTime: usedWithTimeCount
+   });
+   
+   // Lấy một số vé mẫu để debug
+   const sampleTickets = await Ticket.find({}).select('orderId status usedAt').limit(5);
+   logInfo('Sample tickets:', sampleTickets.map(t => ({
+     orderId: t.orderId,
+     status: t.status,
+     hasUsedAt: !!t.usedAt
+   })));
+   
+   // Query chính - tạm thời mở rộng điều kiện để test
+   let query = {};
+   
+   // Nếu không có vé 'used' nào, lấy tất cả để test
+   if (usedTicketsCount === 0) {
+     logInfo('No used tickets found, getting all tickets for debug');
+     query = {}; // Lấy tất cả
+   } else {
+     query = { 
+       status: 'used',
+       usedAt: { $exists: true }
+     };
+   }
+   
+   const scanHistory = await Ticket.find(query)
+     .populate('movie', 'name')
+     .populate('cinema', 'name')
+     .populate('room', 'name')
+     .populate('seats', 'name seatNumber')
+     .populate('time', 'startTime showDate')
+     .sort({ usedAt: -1, bookingTime: -1 }) // Fallback sort
+     .skip(skip)
+     .limit(limit);
+
+   logInfo(`Found ${scanHistory.length} tickets for scan history`);
+
+   const transformedHistory = scanHistory.map(ticket => {
+     // Tính toán showTime từ nhiều sources
+     let showTime = 'N/A';
+     if (ticket.time) {
+       showTime = ticket.time.startTime || ticket.time.showDate || 'N/A';
+     }
+     
+     // Tính scanTime - ưu tiên usedAt, fallback về bookingTime
+     let scanTime = ticket.usedAt || ticket.bookingTime || new Date();
+     
+     return {
+       _id: ticket._id,
+       orderId: ticket.orderId,
+       movieTitle: ticket.movie?.name || 'N/A',
+       customerName: ticket.userInfo?.fullName || 'N/A',
+       seatNumber: ticket.seats?.map(s => s.seatNumber || s.name).join(', ') || 'N/A',
+       showTime: showTime,
+       scanTime: scanTime,
+       status: ticket.status, // Hiển thị status thật
+       qrData: ticket.orderId
+     };
+   });
+
+   logSuccess(`Returning ${transformedHistory.length} scan history records`);
+
+   res.json({
+     success: true,
+     data: transformedHistory,
+     total: scanHistory.length,
+     debug: {
+       totalTickets: allTicketsCount,
+       usedTickets: usedTicketsCount,
+       usedWithTime: usedWithTimeCount,
+       queryUsed: Object.keys(query).length === 0 ? 'all tickets' : 'used tickets only'
+     }
+   });
+
+ } catch (error) {
+   logError('getScanHistory error', error);
+   res.status(500).json({
+     success: false,
+     error: 'Lỗi server khi lấy lịch sử quét'
+   });
+ }
+};

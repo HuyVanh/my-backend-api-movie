@@ -120,12 +120,12 @@ const UserSchema = new mongoose.Schema({
   },
 });
 
-// ================== THAY ĐỔI 3: Thêm method kiểm tra nhân viên ==================
+
 UserSchema.methods.isEmployee = function() {
   return this.role === 'employee' && this.employee && this.employee.employee_id;
 };
 
-// ================== THAY ĐỔI 4: Method tự động tạo employee_id ==================
+
 UserSchema.methods.generateEmployeeId = function() {
   // Tạo prefix từ position (3 ký tự đầu viết hoa)
   const prefix = this.employee?.position ? 
@@ -137,7 +137,6 @@ UserSchema.methods.generateEmployeeId = function() {
   return `${prefix}${timestamp}`;
 };
 
-// ================== THAY ĐỔI 5: Cập nhật toJSON method ==================
 UserSchema.methods.toJSON = function() {
   const user = this.toObject();
   delete user.password;
@@ -151,7 +150,6 @@ UserSchema.methods.toJSON = function() {
   return user;
 };
 
-// ================== THAY ĐỔI 6: Cập nhật pre-save hook ==================
 UserSchema.pre("save", async function (next) {
   // Tự động tạo employee_id nếu là nhân viên mới
   if (this.role === 'employee' && 
