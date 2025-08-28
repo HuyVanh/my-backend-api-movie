@@ -20,7 +20,8 @@ const {
   getTicketsByShowtime,        
   getSeatBookingStatus,
   scanTicket,
-  getScanHistory
+  getScanHistory,
+  getEmployeeScanHistory
 } = require('../controllers/ticketController');
 
 router.route('/debug').get(debugTickets);
@@ -28,6 +29,8 @@ router.route('/debug').get(debugTickets);
 // ✅ Public search routes
 router.route('/order/:orderId').get(getTicketByOrderId);
 router.route('/email/:email').get(getTicketsByEmail);
+
+// ✅ Protected routes (require authentication)
 router.use(protect);
 
 // ✅ User's own tickets
@@ -49,7 +52,6 @@ router.route('/:id/payment').put(updatePaymentStatus);
 router.route('/:id/cancel').put(cancelTicket);
 router.route('/:id/validate').get(validateTicket);
 
-
 // ============ ADMIN ROUTES (Admin Authorization Required) ============
 router.use(authorize('admin'));
 
@@ -61,5 +63,8 @@ router.route('/seat-status/:showtimeId').get(getSeatBookingStatus);
 router.route('/').get(getTickets);                    // Get all tickets with pagination
 router.route('/stats').get(getTicketStats);          // Get ticket statistics
 router.route('/user/:userId').get(getTicketsByUser); // Get tickets by specific user
+
+// ✅ FIXED: Employee scan history route - sử dụng đúng middleware names
+router.route('/employee-scan-history/:employeeId').get(getEmployeeScanHistory);
 
 module.exports = router;

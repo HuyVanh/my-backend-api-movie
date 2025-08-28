@@ -42,7 +42,7 @@ const TicketSchema = new mongoose.Schema({
     ref: "Room",
     required: true,
   },
-    showtime: {
+  showtime: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "ShowTime"
   },
@@ -137,8 +137,27 @@ const TicketSchema = new mongoose.Schema({
     type: Date,
   },
   usedAt: {
-  type: Date,
-},
+    type: Date,
+  },
+
+  // ✅ CÁC FIELD MỚI ĐỂ TRACK NHÂN VIÊN QUÉT VÉ
+  scannedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    default: null,
+    index: true // Để query nhanh hơn
+  },
+  scannedByName: {
+    type: String,
+    default: null
+  },
+  employeeId: { 
+    // Backup field cho compatibility
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User", 
+    default: null,
+    index: true
+  },
 
   date: {
     type: Date,
@@ -163,15 +182,23 @@ const TicketSchema = new mongoose.Schema({
     default: 0,
   },
 });
+
 TicketSchema.pre("save", function (next) {
   if (!this.orderId) {
     this.orderId = `TK${Date.now()}${Math.floor(Math.random() * 1000)}`;
   }
   next();
 });
+
+// Existing indexes
 TicketSchema.index({ showtime: 1, status: 1 });
 TicketSchema.index({ time: 1, status: 1 });
 TicketSchema.index({ room: 1, showtime: 1 });
 TicketSchema.index({ seats: 1, showtime: 1 });
+
+// ✅ NEW INDEXES cho scan history queries
+TicketSchema.index({ scannedBy: 1, usedAt: -1 }); // Query scan history by employee
+TicketSchema.index({ employeeId: 1, usedAt: -1 }); // Backup index
+TicketSchema.index({ status: 1, scannedBy: 1 });   // Combined status + employee query
 
 module.exports = mongoose.model("Ticket", TicketSchema);

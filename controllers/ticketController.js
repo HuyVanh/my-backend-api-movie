@@ -1389,7 +1389,10 @@ exports.getSeatBookingStatus = async (req, res) => {
 exports.scanTicket = async (req, res) => {
   try {
     const { qrData } = req.body;
-    logInfo('Scanning QR:', qrData);
+    const employeeId = req.user.id; // Lấy ID nhân viên từ token
+    const employeeName = req.user.name || req.user.fullName; // Lấy tên nhân viên
+    
+    logInfo('Scanning QR:', { qrData, employeeId, employeeName });
     
     let ticketQuery;
     try {
@@ -1429,9 +1432,12 @@ exports.scanTicket = async (req, res) => {
       });
     }
     
-    // ✅ FIX: Lưu cả status VÀ usedAt
+    // ✅ CRITICAL FIX: Lưu thông tin nhân viên quét vé
     ticket.status = 'used';
     ticket.usedAt = new Date();
+    ticket.scannedBy = employeeId;           // ID nhân viên quét
+    ticket.scannedByName = employeeName;     // Tên nhân viên quét
+    ticket.employeeId = employeeId;          // Backup field cho compatibility
     
     const savedTicket = await ticket.save();
     
@@ -1439,7 +1445,9 @@ exports.scanTicket = async (req, res) => {
     logSuccess('Ticket marked as used:', {
       orderId: savedTicket.orderId,
       status: savedTicket.status,
-      usedAt: savedTicket.usedAt
+      usedAt: savedTicket.usedAt,
+      scannedBy: savedTicket.scannedBy,
+      scannedByName: savedTicket.scannedByName
     });
     
     res.json({
@@ -1450,7 +1458,9 @@ exports.scanTicket = async (req, res) => {
         orderId: ticket.orderId,
         movieName: ticket.movie?.name,
         cinemaName: ticket.cinema?.name,
-        customerName: ticket.userInfo?.fullName
+        customerName: ticket.userInfo?.fullName,
+        scannedBy: employeeName,
+        scanTime: savedTicket.usedAt
       }
     });
     
@@ -1466,16 +1476,25 @@ exports.scanTicket = async (req, res) => {
 // @desc    Lấy lịch sử quét vé (các vé đã được scan)
 // @route   GET /api/tickets/scan-history
 // @access  Private (Staff)
+// @desc    Lấy lịch sử quét vé (các vé đã được scan bởi nhân viên hiện tại)
+// @route   GET /api/tickets/scan-history
+// @access  Private (Staff)
 exports.getScanHistory = async (req, res) => {
   try {
-    logInfo('Getting scan history');
+    const employeeId = req.user.id; // Lấy ID nhân viên từ token
+    logInfo('Getting scan history for employee:', employeeId);
     
     const { page = 1, limit = 50 } = req.query;
     const skip = (page - 1) * limit;
     
+    // ✅ CRITICAL FIX: Chỉ lấy vé được quét bởi nhân viên hiện tại
     const scanHistory = await Ticket.find({ 
       status: 'used',
-      usedAt: { $exists: true }
+      usedAt: { $exists: true },
+      $or: [
+        { scannedBy: employeeId },      // Field mới
+        { employeeId: employeeId }      // Backup field
+      ]
     })
     .populate('movie', 'name')
     .populate('cinema', 'name')
@@ -1489,11 +1508,16 @@ exports.getScanHistory = async (req, res) => {
     .skip(skip)
     .limit(limit);
 
-    logInfo(`Found ${scanHistory.length} tickets for scan history`);
+    logInfo(`Found ${scanHistory.length} tickets for employee ${employeeId} scan history`);
     
     // Debug time data
     if (scanHistory.length > 0) {
-      logInfo('Sample time data:', scanHistory[0]?.time);
+      logInfo('Sample scan record:', {
+        orderId: scanHistory[0]?.orderId,
+        scannedBy: scanHistory[0]?.scannedBy,
+        scannedByName: scanHistory[0]?.scannedByName,
+        usedAt: scanHistory[0]?.usedAt
+      });
     }
 
     const transformedHistory = scanHistory.map(ticket => {
@@ -1539,16 +1563,33 @@ exports.getScanHistory = async (req, res) => {
         showTime: showTime,
         scanTime: ticket.usedAt,
         status: 'used',
-        qrData: ticket.orderId
+        qrData: ticket.orderId,
+        scannedBy: ticket.scannedBy,
+        scannedByName: ticket.scannedByName,
+        employeeId: ticket.employeeId // Backup field
       };
     });
 
-    logSuccess(`Returning ${transformedHistory.length} scan history records`);
+    // ✅ Đếm tổng số vé của nhân viên này (không phân trang)
+    const total = await Ticket.countDocuments({
+      status: 'used',
+      usedAt: { $exists: true },
+      $or: [
+        { scannedBy: employeeId },
+        { employeeId: employeeId }
+      ]
+    });
+
+    logSuccess(`Returning ${transformedHistory.length} scan history records for employee ${employeeId} (${total} total)`);
 
     res.json({
       success: true,
       data: transformedHistory,
-      total: scanHistory.length
+      count: transformedHistory.length,
+      total: total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit),
+      employeeId: employeeId // Debug info
     });
 
   } catch (error) {
@@ -1556,6 +1597,78 @@ exports.getScanHistory = async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Lỗi server khi lấy lịch sử quét'
+    });
+  }
+};
+// controllers/ticketController.js
+
+// @desc    Lấy lịch sử quét vé của nhân viên cụ thể (Admin only)
+// @route   GET /api/tickets/employee-scan-history/:employeeId
+// @access  Private (Admin)
+exports.getEmployeeScanHistory = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    logInfo('Getting scan history for employee:', employeeId);
+    
+    const { page = 1, limit = 50 } = req.query;
+    const skip = (page - 1) * limit;
+    
+    const scanHistory = await Ticket.find({ 
+      status: 'used',
+      usedAt: { $exists: true },
+      $or: [
+        { scannedBy: employeeId },
+        { employeeId: employeeId }
+      ]
+    })
+    .populate('movie', 'name')
+    .populate('cinema', 'name')
+    .populate('room', 'name')
+    .populate('seats', 'name seatNumber')
+    .populate({
+      path: 'time',
+      select: 'startTime showDate time date'
+    })
+    .sort({ usedAt: -1 })
+    .skip(skip)
+    .limit(limit);
+
+    const total = await Ticket.countDocuments({
+      status: 'used',
+      usedAt: { $exists: true },
+      $or: [
+        { scannedBy: employeeId },
+        { employeeId: employeeId }
+      ]
+    });
+
+    const transformedHistory = scanHistory.map(ticket => ({
+      _id: ticket._id,
+      orderId: ticket.orderId,
+      movieTitle: ticket.movie?.name || 'N/A',
+      customerName: ticket.userInfo?.fullName || 'N/A', 
+      seatNumber: ticket.seats?.map(s => s.seatNumber || s.name).join(', ') || 'N/A',
+      showTime: ticket.time?.startTime || ticket.time?.showDate || ticket.showdate,
+      scanTime: ticket.usedAt,
+      status: 'used',
+      qrData: ticket.orderId
+    }));
+
+    logSuccess(`Found ${transformedHistory.length} scan records for employee: ${employeeId}`);
+
+    res.json({
+      success: true,
+      data: transformedHistory,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / limit)
+    });
+
+  } catch (error) {
+    logError('getEmployeeScanHistory error', error);
+    res.status(500).json({
+      success: false,
+      error: 'Lỗi server khi lấy lịch sử quét của nhân viên'
     });
   }
 };
