@@ -48,20 +48,18 @@ const UserSchema = new mongoose.Schema({
     default: "active",
   },
   
-  // ================== THAY ĐỔI 1: Mở rộng role ==================
   role: {
     type: String,
-    enum: ["user", "admin", "employee"], // ← THÊM "employee" vào đây
+    enum: ["user", "admin", "employee"],
     default: "user",
   },
   
-  // ================== THAY ĐỔI 2: Thêm trường employee ==================
   employee: {
     // ID nhân viên (tự động tạo)
     employee_id: {
       type: String,
       unique: true,
-      sparse: true, // Chỉ áp dụng unique khi field có giá trị
+      sparse: true,
     },
     
     // Vị trí công việc

@@ -6,6 +6,7 @@ const Cinema = require('../models/cinemaModel');
 const Room = require('../models/roomModel');
 const Food = require('../models/foodModel');
 const Discount = require('../models/discountModel');
+const ShowTime = require('../models/showTimeModel');
 
 // ✅ NEW: Import notification helper
 const { createPaymentNotification } = require('./notificationController');
@@ -62,7 +63,7 @@ exports.getTickets = async (req, res) => {
       .populate('discount', 'name percent')
       .populate({
         path: 'time',
-        select: 'time date startTime showDate', // ✅ Handle different field names
+        select: 'time date startTime showDate', 
         populate: {
           path: 'movie room cinema',
           select: 'name'
@@ -474,16 +475,15 @@ exports.getTicketsByUser = async (req, res) => {
 // @desc    Đặt vé mới (Enhanced for multiple seats/foods + ShowTime)
 // @route   POST /api/tickets
 // @access  Private (optional - can work for guests)
+// ✅ FIX: Hoàn thành hàm createTicket với response
 exports.createTicket = async (req, res) => {
   try {
     logInfo('Received booking data:', req.body);
 
-    // ✅ Handle both old API format and new frontend format
     let ticketData;
     
-    // Check if this is new frontend format (has selectedSeats, userInfo, etc.)
     if (req.body.selectedSeats || req.body.userInfo) {
-      // ✅ NEW FORMAT: From frontend
+      // NEW FORMAT: From frontend
       const { 
         orderId,
         movieTitle,
@@ -529,35 +529,68 @@ exports.createTicket = async (req, res) => {
         });
       }
 
+      // ✅ FIX: Import ShowTime model và check showtime
+      const showtimeData = await ShowTime.findById(showtimeId).populate('room');
+      if (!showtimeData) {
+        return res.status(400).json({
+          success: false,
+          error: 'Suất chiếu không tồn tại'
+        });
+      }
+
+      // ✅ FIX: Verify roomId matches showtime's room
+      if (showtimeData.room._id.toString() !== roomId.toString()) {
+        return res.status(400).json({
+          success: false,
+          error: 'Phòng chiếu không khớp với suất chiếu'
+        });
+      }
+
       // Process seats for new format
       const seatIds = selectedSeats.map(seat => extractId(seat));
       
-      // Check seat availability
-      for (let i = 0; i < selectedSeats.length; i++) {
-        const seat = selectedSeats[i];
-        const seatId = seatIds[i];
-        
-        const seatExists = await Seat.findById(seatId);
-        if (!seatExists) {
-          return res.status(400).json({
-            success: false,
-            error: `Ghế ${seat.name || seat.seatNumber || seatId} không tồn tại`
-          });
-        }
+      // ✅ FIX: Check all seats belong to the correct room
+      const seatsInRoom = await Seat.find({
+        _id: { $in: seatIds },
+        room: roomId
+      });
 
-        const seatStatus = await SeatStatus.findOne({
-          seat: seatId,
-          room: roomId,
-          day: showtime?.date || new Date().toISOString().split('T')[0],
-          showtime: showtimeId
+      if (seatsInRoom.length !== seatIds.length) {
+        const validSeatIds = seatsInRoom.map(s => s._id.toString());
+        const invalidSeatIds = seatIds.filter(id => !validSeatIds.includes(id.toString()));
+        
+        return res.status(400).json({
+          success: false,
+          error: `Một số ghế không thuộc phòng ${showtimeData.room.name}`,
+          invalidSeats: invalidSeatIds
+        });
+      }
+
+      // ✅ FIX: Check seat availability for THIS specific showtime
+      const bookedTickets = await Ticket.find({
+        $or: [
+          { showtime: showtimeId },
+          { time: showtimeId }
+        ],
+        status: { $in: ['completed', 'pending_payment'] },
+        seats: { $in: seatIds }
+      });
+
+      if (bookedTickets.length > 0) {
+        const bookedSeatIds = new Set();
+        bookedTickets.forEach(ticket => {
+          ticket.seats.forEach(seatId => bookedSeatIds.add(seatId.toString()));
         });
 
-        if (seatStatus && seatStatus.status === 'booked') {
-          return res.status(400).json({
-            success: false,
-            error: `Ghế ${seat.name || seat.seatNumber} đã được đặt`
-          });
-        }
+        const conflictSeats = seatIds.filter(id => bookedSeatIds.has(id.toString()));
+        const conflictSeatNames = seatsInRoom
+          .filter(s => conflictSeats.includes(s._id.toString()))
+          .map(s => s.name);
+
+        return res.status(400).json({
+          success: false,
+          error: `Ghế ${conflictSeatNames.join(', ')} đã được đặt cho suất chiếu này`
+        });
       }
 
       // Process food items
@@ -567,7 +600,7 @@ exports.createTicket = async (req, res) => {
         price: item.price * (item.quantity || 1)
       }));
 
-      // Prepare ticket data for new format
+      // ✅ FIX: Create complete ticket data
       ticketData = {
         orderId: orderId || `TK${Date.now()}`,
         user: req.user?.id || null,
@@ -579,8 +612,14 @@ exports.createTicket = async (req, res) => {
         movie: movieDbId,
         cinema: cinemaId,
         room: roomId,
-        time: showtimeId, // References ShowTime
+        time: showtimeId,
+        showtime: showtimeId,
         seats: seatIds,
+        selectedSeats: selectedSeats.map(seat => ({
+          seatId: extractId(seat),
+          name: seat.name,
+          price: seat.price
+        })),
         foodItems: processedFoodItems,
         paymentMethod: paymentMethod || 'cash',
         seatTotalPrice,
@@ -590,10 +629,11 @@ exports.createTicket = async (req, res) => {
         status: status,
         showdate: showtime?.date || new Date().toISOString().split('T')[0],
         confirmedAt: status === 'completed' ? new Date() : null,
-        discount: discount || null
+        discount: discount || null,
+        bookingTime: new Date()
       };
 
-      // Update seat status for new format
+      // ✅ FIX: Update seat status
       for (const seatId of seatIds) {
         await SeatStatus.findOneAndUpdate(
           { 
@@ -607,150 +647,63 @@ exports.createTicket = async (req, res) => {
         );
       }
 
-    } else {
-      // ✅ OLD FORMAT: Legacy API format
-      const { seat, movie, cinema, room, time, showdate, food, discount } = req.body;
-
-      // Validation for old format
-      if (!seat || !movie || !cinema || !room || !time) {
-        return res.status(400).json({
-          success: false,
-          error: 'Thiếu thông tin bắt buộc: seat, movie, cinema, room, time'
-        });
-      }
-
-      // Check seat availability (old format)
-      const seatExists = await Seat.findById(seat);
-      if (!seatExists) {
-        return res.status(400).json({
-          success: false,
-          error: 'Ghế không tồn tại'
-        });
-      }
-
-      const seatStatus = await SeatStatus.findOne({
-        seat: seat,
-        room: room,
-        day: showdate,
-        showtime: time
+      logInfo('Processed ticket data:', {
+        orderId: ticketData.orderId,
+        seats: ticketData.seats.length,
+        total: ticketData.total,
+        paymentMethod: ticketData.paymentMethod
       });
 
-      if (seatStatus && seatStatus.status !== 'available') {
-        return res.status(400).json({
-          success: false,
-          error: 'Ghế đã được đặt hoặc không khả dụng'
-        });
-      }
-
-      // Calculate pricing (old format)
-      let total = seatExists.price;
-      let total_food = 0;
-
-      if (food) {
-        const foodItem = await Food.findById(food);
-        if (foodItem) {
-          total_food = foodItem.price;
-          total += total_food;
-        }
-      }
-
-      if (discount) {
-        const discountItem = await Discount.findById(discount);
-        if (discountItem && discountItem.status === 'active') {
-          const discountAmount = (total * discountItem.percent) / 100;
-          total -= discountAmount;
-        }
-      }
-
-      // Prepare ticket data for old format
-      ticketData = {
-        user: req.user.id,
-        seat,
-        movie,
-        cinema,
-        room,
-        time,
-        showdate,
-        food,
-        discount,
-        total,
-        total_food,
-        // Set defaults for new fields
-        seats: [seat],
-        paymentMethod: 'cash',
-        status: 'pending_payment',
-        seatTotalPrice: seatExists.price,
-        foodTotalPrice: total_food,
-        userInfo: {
-          fullName: req.user.name || 'N/A',
-          email: req.user.email || 'N/A', 
-          phone: req.user.number_phone || 'N/A'
-        }
-      };
-
-      // Update seat status (old format)
-      await SeatStatus.findOneAndUpdate(
-        { seat: seat, room: room, day: showdate, showtime: time },
-        { status: 'booked' },
-        { upsert: true, new: true }
-      );
+    } else {
+      // ✅ OLD FORMAT support (nếu cần)
+      return res.status(400).json({
+        success: false,
+        error: 'Định dạng dữ liệu không được hỗ trợ'
+      });
     }
 
-    logInfo('Creating ticket with data:', ticketData);
+    // ✅ FIX: Create the ticket in database
+    const newTicket = new Ticket(ticketData);
+    const savedTicket = await newTicket.save();
 
-    // Create ticket
-    const ticket = await Ticket.create(ticketData);
+    logSuccess('Ticket created successfully:', {
+      id: savedTicket._id,
+      orderId: savedTicket.orderId,
+      status: savedTicket.status
+    });
 
-    // Populate and return
-    const populatedTicket = await Ticket.findById(ticket._id)
+    // ✅ FIX: Populate response data
+    const populatedTicket = await Ticket.findById(savedTicket._id)
+      .populate('user', 'name email')
+      .populate('seats', 'name price row column seatNumber')
       .populate('movie', 'name image duration genre')
       .populate('cinema', 'name address')
       .populate('room', 'name')
-      .populate('seats', 'name price')
       .populate('foodItems.food', 'name price image')
+      .populate('discount', 'name percent')
       .populate({
         path: 'time',
-        select: 'time date startTime showDate',
-        populate: {
-          path: 'movie room cinema',
-          select: 'name'
-        }
-      })
-      .populate('discount', 'name percent');
+        select: 'time date startTime showDate'
+      });
 
-    logSuccess('Ticket created successfully:', ticket.orderId);
-
-    // ✅ NEW: Tạo notification cho ticket được tạo
-    try {
-      const userId = ticket.user || null;
-      if (userId) {
-        await createPaymentNotification(userId, {
-          ticketId: ticket._id,
-          paymentId: null,
-          amount: ticket.total,
-          currency: 'vnd'
-        }, 'ticket_booked');
-        
-        logSuccess('Ticket booking notification created');
-      }
-    } catch (notificationError) {
-      logError('Failed to create ticket notification', notificationError);
-      // Không fail ticket creation nếu notification thất bại
-    }
-
+    // ✅ CRITICAL: Send response back to frontend
     res.status(201).json({
       success: true,
-      data: populatedTicket,
-      orderId: ticket.orderId || ticket._id
+      message: 'Vé được tạo thành công',
+      data: populatedTicket
     });
 
   } catch (err) {
     logError('Create ticket error', err);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi server khi tạo vé',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    
+    // ✅ FIX: Always send response even on error
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: 'Lỗi server khi tạo vé',
+        details: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    }
   }
 };
 

@@ -514,7 +514,12 @@ exports.validateSeatsAvailability = async (req, res) => {
 // @desc    Lấy trạng thái ghế cho suất chiếu
 // @route   GET /api/seats/status/:showtimeId
 // @access  Public
+// @desc    Lấy trạng thái ghế cho suất chiếu
+// @route   GET /api/seats/status/:showtimeId
+// @access  Public
+// seatController.js - getSeatStatusByShowtime
 exports.getSeatStatusByShowtime = async (req, res) => {
+  console.log('🔍 [SEAT-STATUS] API Called with showtimeId:', req.params.showtimeId);
   try {
     const { showtimeId } = req.params;
 
@@ -524,40 +529,73 @@ exports.getSeatStatusByShowtime = async (req, res) => {
       .populate('movie', 'name');
       
     if (!showtime) {
+      console.log('❌ Showtime not found:', showtimeId);
       return res.status(404).json({
         success: false,
         message: 'Suất chiếu không tồn tại'
       });
     }
 
-    // Lấy tất cả ghế trong phòng
-    const allSeats = await Seat.find({ room: showtime.room._id }).sort({ name: 1 });
+    const roomId = showtime.room._id;
+    console.log('✅ Showtime found for room:', roomId);
 
-    // ✅ SỬA: Sử dụng Ticket đã import ở đầu file
+    // Lấy tất cả ghế trong phòng hiện tại
+    const allSeats = await Seat.find({ room: roomId }).sort({ name: 1 });
+    console.log(`🪑 Found ${allSeats.length} seats in room ${roomId}`);
+
+    // ✅ FIX: Query tickets với cả showtime và room để đảm bảo chính xác
     const existingBookings = await Ticket.find({
-      showtime: showtimeId,
+      $or: [
+        { showtime: showtimeId },  // New field
+        { time: showtimeId }        // Backward compatibility
+      ],
+      room: roomId,  // ✅ IMPORTANT: Filter by room
       status: { $in: ['completed', 'pending_payment'] }
-    });
+    }).populate('seats');
 
-    // Tạo map trạng thái ghế
-    const bookedSeatIds = [];
-    existingBookings.forEach(booking => {
+    console.log(`🎫 Found ${existingBookings.length} bookings for showtime ${showtimeId} in room ${roomId}`);
+
+    // Collect booked seat IDs - already filtered by room
+    const bookedSeatIds = new Set();
+    existingBookings.forEach((booking) => {
+      if (booking.seats && Array.isArray(booking.seats)) {
+        booking.seats.forEach((seat) => {
+          // Double-check seat belongs to this room
+          if (seat.room && seat.room.toString() === roomId.toString()) {
+            bookedSeatIds.add(seat._id.toString());
+          }
+        });
+      }
+      
+      // Also check selectedSeats field if exists
       if (booking.selectedSeats && Array.isArray(booking.selectedSeats)) {
-        booking.selectedSeats.forEach(seat => {
-          if (seat.seatId || seat._id) {
-            bookedSeatIds.push((seat.seatId || seat._id).toString());
+        booking.selectedSeats.forEach((seat) => {
+          const seatId = (seat.seatId || seat._id || seat).toString();
+          // Verify this seat exists in our room's seats
+          if (allSeats.some(s => s._id.toString() === seatId)) {
+            bookedSeatIds.add(seatId);
           }
         });
       }
     });
+
+    console.log(`🔒 Booked seats in room: ${Array.from(bookedSeatIds).join(', ')}`);
 
     // Format response
     const seatStatus = allSeats.map(seat => ({
       id: seat._id,
       name: seat.name,
       price: seat.price,
-      status: bookedSeatIds.includes(seat._id.toString()) ? 'booked' : 'available'
+      status: bookedSeatIds.has(seat._id.toString()) ? 'booked' : 'available'
     }));
+
+    const summary = {
+      total: allSeats.length,
+      available: seatStatus.filter(s => s.status === 'available').length,
+      booked: seatStatus.filter(s => s.status === 'booked').length
+    };
+
+    console.log('📊 Summary:', summary);
 
     return res.status(200).json({
       success: true,
@@ -566,15 +604,12 @@ exports.getSeatStatusByShowtime = async (req, res) => {
           id: showtime._id,
           movie: showtime.movie.name,
           room: showtime.room.name,
+          roomId: showtime.room._id,
           date: showtime.date,
           time: showtime.time
         },
         seats: seatStatus,
-        summary: {
-          total: allSeats.length,
-          available: seatStatus.filter(s => s.status === 'available').length,
-          booked: seatStatus.filter(s => s.status === 'booked').length
-        },
+        summary: summary,
         lastUpdated: new Date().toISOString()
       }
     });
@@ -583,7 +618,8 @@ exports.getSeatStatusByShowtime = async (req, res) => {
     console.error('❌ Get seat status error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Lỗi server khi lấy trạng thái ghế'
+      message: 'Lỗi server khi lấy trạng thái ghế',
+      error: error.message
     });
   }
 };

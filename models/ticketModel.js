@@ -1,20 +1,15 @@
 const mongoose = require("mongoose");
 
 const TicketSchema = new mongoose.Schema({
-  // ✅ Order tracking - REMOVED duplicate index
   orderId: {
     type: String,
     unique: true,
     required: true,
   },
-
-  // ✅ User reference (optional for guest bookings)
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
-
-  // ✅ User info for guest bookings
   userInfo: {
     fullName: {
       type: String,
@@ -30,14 +25,12 @@ const TicketSchema = new mongoose.Schema({
     },
   },
 
-  // ✅ Movie info
   movie: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Movie",
     required: true,
   },
 
-  // ✅ Cinema & Room info
   cinema: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Cinema",
@@ -49,19 +42,28 @@ const TicketSchema = new mongoose.Schema({
     ref: "Room",
     required: true,
   },
+    showtime: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "ShowTime"
+  },
 
   time: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "ShowTime", 
     required: true,
   },
-
+   selectedSeats: [{
+    seatId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seat"
+    },
+    name: String,
+    price: Number
+  }],
   showdate: {
     type: String,
     required: true,
   },
-
-  // ✅ Multiple seats support
   seats: [
     {
       type: mongoose.Schema.Types.ObjectId,
@@ -69,8 +71,6 @@ const TicketSchema = new mongoose.Schema({
       required: true,
     },
   ],
-
-  // ✅ Multiple food items support
   foodItems: [
     {
       food: {
@@ -87,14 +87,10 @@ const TicketSchema = new mongoose.Schema({
       },
     },
   ],
-
-  // ✅ Discount support
   discount: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Discount",
   },
-
-  // ✅ Payment info
   paymentMethod: {
     type: String,
     enum: ["cash", "stripe"],
@@ -103,11 +99,9 @@ const TicketSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["pending_payment", "completed", "cancelled", "used"], // ✅ Thêm 'used'
+    enum: ["pending_payment", "completed", "cancelled", "used"],
     default: "pending_payment",
   },
-
-  // ✅ Pricing breakdown
   seatTotalPrice: {
     type: Number,
     required: true,
@@ -134,8 +128,6 @@ const TicketSchema = new mongoose.Schema({
     type: Number,
     required: true,
   },
-
-  // ✅ Timestamps
   bookingTime: {
     type: Date,
     default: Date.now,
@@ -148,7 +140,6 @@ const TicketSchema = new mongoose.Schema({
   type: Date,
 },
 
-  // ✅ Legacy fields (keep for compatibility)
   date: {
     type: Date,
     default: Date.now,
@@ -157,8 +148,6 @@ const TicketSchema = new mongoose.Schema({
   auth: {
     type: String,
   },
-
-  // ✅ Deprecated single fields (keep for backward compatibility)
   seat: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Seat",
@@ -174,17 +163,15 @@ const TicketSchema = new mongoose.Schema({
     default: 0,
   },
 });
-
-// ✅ Generate orderId before saving
 TicketSchema.pre("save", function (next) {
   if (!this.orderId) {
     this.orderId = `TK${Date.now()}${Math.floor(Math.random() * 1000)}`;
   }
   next();
 });
-TicketSchema.index({ user: 1 });
-TicketSchema.index({ "userInfo.email": 1 });
-TicketSchema.index({ status: 1 });
-TicketSchema.index({ bookingTime: -1 });
+TicketSchema.index({ showtime: 1, status: 1 });
+TicketSchema.index({ time: 1, status: 1 });
+TicketSchema.index({ room: 1, showtime: 1 });
+TicketSchema.index({ seats: 1, showtime: 1 });
 
 module.exports = mongoose.model("Ticket", TicketSchema);

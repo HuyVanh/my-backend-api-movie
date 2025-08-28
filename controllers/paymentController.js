@@ -1,3 +1,4 @@
+// ✅ FIXED Payment Controller với better error handling
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Ticket = require('../models/ticketModel');
 
@@ -7,6 +8,15 @@ const Ticket = require('../models/ticketModel');
 exports.createPaymentIntent = async (req, res) => {
   try {
     console.log('📦 Payment Intent Request:', req.body);
+    
+    // ✅ ADD: Validate Stripe key
+    if (!process.env.STRIPE_SECRET_KEY) {
+      console.error('❌ STRIPE_SECRET_KEY not configured');
+      return res.status(500).json({
+        success: false,
+        error: 'Payment service not configured'
+      });
+    }
 
     const { 
       amount, 
@@ -17,17 +27,33 @@ exports.createPaymentIntent = async (req, res) => {
       metadata = {} 
     } = req.body;
 
-    // Validation
+    // ✅ IMPROVED: Better validation
     if (!amount || amount <= 0) {
+      console.error('❌ Invalid amount:', amount);
       return res.status(400).json({
         success: false,
         error: 'Số tiền không hợp lệ'
       });
     }
 
+    // ✅ FIX: Ensure amount is integer for VND
+    const stripeAmount = Math.round(Number(amount));
+    console.log('💰 Processing amount:', { original: amount, stripe: stripeAmount });
+
+    // ✅ ADD: Timeout handling
+    const timeout = setTimeout(() => {
+      console.error('❌ Payment Intent timeout');
+      if (!res.headersSent) {
+        res.status(408).json({
+          success: false,
+          error: 'Request timeout'
+        });
+      }
+    }, 25000); // 25 second timeout
+
     // Tạo Payment Intent với Stripe
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount), // Stripe yêu cầu số nguyên (VND đã tính bằng đồng)
+      amount: stripeAmount,
       currency: currency.toLowerCase(),
       metadata: {
         orderId: orderId || '',
@@ -40,35 +66,68 @@ exports.createPaymentIntent = async (req, res) => {
       automatic_payment_methods: {
         enabled: true,
       },
-      // Thêm description cho dễ theo dõi
       description: `Đặt vé xem phim: ${movieTitle || 'Movie Ticket'}`,
     });
 
+    clearTimeout(timeout);
+
     console.log('✅ Payment Intent created:', paymentIntent.id);
 
-    res.status(200).json({
-      success: true,
-      client_secret: paymentIntent.client_secret,
-      payment_intent_id: paymentIntent.id,
-      amount: paymentIntent.amount,
-      currency: paymentIntent.currency
-    });
+    // ✅ FIX: Ensure response is sent only once
+    if (!res.headersSent) {
+      res.status(200).json({
+        success: true,
+        client_secret: paymentIntent.client_secret,
+        payment_intent_id: paymentIntent.id,
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency
+      });
+    }
 
   } catch (error) {
-    console.error('❌ Payment Intent Error:', error.message);
+    console.error('❌ Payment Intent Error:', {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      stack: error.stack
+    });
+    
+    // ✅ FIX: Better error responses
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: 'Không thể tạo payment intent',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  }
+};
+
+// ✅ ADD: Health check endpoint
+exports.healthCheck = async (req, res) => {
+  try {
+    // Test Stripe connection
+    await stripe.charges.list({ limit: 1 });
+    
+    res.json({
+      success: true,
+      stripe: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
     res.status(500).json({
       success: false,
-      error: 'Không thể tạo payment intent',
-      details: error.message
+      stripe: 'error',
+      error: error.message
     });
   }
 };
 
-// @desc    Xác nhận thanh toán thành công
-// @route   POST /api/payment/confirm-payment
-// @access  Public
+// ✅ IMPROVED: Better confirm payment
 exports.confirmPayment = async (req, res) => {
   try {
+    console.log('🔍 Confirming payment:', req.body);
+    
     const { paymentIntentId, orderId } = req.body;
 
     if (!paymentIntentId) {
@@ -78,8 +137,21 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
+    // ✅ ADD: Timeout for Stripe API call
+    const timeout = setTimeout(() => {
+      if (!res.headersSent) {
+        res.status(408).json({
+          success: false,
+          error: 'Timeout khi xác nhận thanh toán'
+        });
+      }
+    }, 20000);
+
     // Lấy thông tin Payment Intent từ Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    clearTimeout(timeout);
+
+    console.log('💳 Payment Intent status:', paymentIntent.status);
 
     if (paymentIntent.status !== 'succeeded') {
       return res.status(400).json({
@@ -92,13 +164,15 @@ exports.confirmPayment = async (req, res) => {
     // Cập nhật ticket status nếu có orderId
     let ticket = null;
     if (orderId) {
+      console.log('🎫 Updating ticket for order:', orderId);
+      
       ticket = await Ticket.findOneAndUpdate(
         { orderId: orderId },
         { 
           status: 'completed',
           paymentMethod: 'stripe',
           confirmedAt: new Date(),
-          stripePaymentIntentId: paymentIntentId // Lưu lại để theo dõi
+          stripePaymentIntentId: paymentIntentId
         },
         { new: true }
       ).populate('movie', 'name image')
@@ -106,6 +180,12 @@ exports.confirmPayment = async (req, res) => {
        .populate('room', 'name')
        .populate('seats', 'name')
        .populate('time', 'time date');
+
+      if (!ticket) {
+        console.warn('⚠️ Ticket not found for orderId:', orderId);
+      } else {
+        console.log('✅ Ticket updated successfully');
+      }
     }
 
     console.log('✅ Payment confirmed for order:', orderId);
@@ -123,30 +203,35 @@ exports.confirmPayment = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Confirm Payment Error:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'Lỗi xác nhận thanh toán',
-      details: error.message
+    console.error('❌ Confirm Payment Error:', {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      orderId: req.body.orderId
     });
+    
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: 'Lỗi xác nhận thanh toán',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
   }
 };
 
-// @desc    Webhook từ Stripe (tự động xử lý events)
-// @route   POST /api/payment/webhook
-// @access  Public (with verification)
+// ✅ IMPROVED: Enhanced webhook handling
 exports.stripeWebhook = (req, res) => {
   const sig = req.headers['stripe-signature'];
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET; // Bạn sẽ lấy từ Stripe Dashboard
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let event;
 
   try {
     if (endpointSecret) {
-      // Verify webhook signature
       event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
     } else {
-      // For development without webhook secret
+      console.warn('⚠️ Webhook secret not configured, skipping verification');
       event = req.body;
     }
   } catch (err) {
@@ -154,21 +239,19 @@ exports.stripeWebhook = (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  console.log('🔔 Webhook received:', event.type);
+
   // Xử lý các sự kiện từ Stripe
   switch (event.type) {
     case 'payment_intent.succeeded':
       const paymentIntent = event.data.object;
       console.log('💰 PaymentIntent succeeded:', paymentIntent.id);
-      
-      // Tự động cập nhật ticket status
       handlePaymentSuccess(paymentIntent);
       break;
 
     case 'payment_intent.payment_failed':
       const failedPayment = event.data.object;
       console.log('❌ Payment failed:', failedPayment.id);
-      
-      // Tự động cập nhật ticket status
       handlePaymentFailure(failedPayment);
       break;
 
@@ -184,54 +267,52 @@ exports.stripeWebhook = (req, res) => {
   res.json({ received: true });
 };
 
-// Helper function: Xử lý thanh toán thành công
+// ✅ IMPROVED: Better error handling in helper functions
 const handlePaymentSuccess = async (paymentIntent) => {
   try {
     const orderId = paymentIntent.metadata.orderId;
     
     if (orderId) {
-      await Ticket.findOneAndUpdate(
+      const ticket = await Ticket.findOneAndUpdate(
         { orderId: orderId },
         { 
           status: 'completed',
           paymentMethod: 'stripe',
           confirmedAt: new Date(),
           stripePaymentIntentId: paymentIntent.id
-        }
+        },
+        { new: true }
       );
-      console.log(`✅ Ticket ${orderId} marked as completed`);
+      
+      if (ticket) {
+        console.log(`✅ Ticket ${orderId} marked as completed`);
+      } else {
+        console.warn(`⚠️ Ticket ${orderId} not found`);
+      }
     }
   } catch (error) {
     console.error('❌ Error updating ticket after payment success:', error.message);
   }
 };
 
-// Helper function: Xử lý thanh toán thất bại
 const handlePaymentFailure = async (paymentIntent) => {
   try {
     const orderId = paymentIntent.metadata.orderId;
     
     if (orderId) {
-      // Có thể cập nhật status hoặc gửi email thông báo
       console.log(`⚠️ Payment failed for ticket ${orderId}`);
-      
-      // Tùy chọn: Tự động hủy vé sau một thời gian
-      // await Ticket.findOneAndUpdate(
-      //   { orderId: orderId },
-      //   { status: 'cancelled', cancelReason: 'Payment failed' }
-      // );
+      // Log for manual review
     }
   } catch (error) {
     console.error('❌ Error handling payment failure:', error.message);
   }
 };
 
-// @desc    Lấy thông tin thanh toán
-// @route   GET /api/payment/payment-intent/:id
-// @access  Public
 exports.getPaymentIntent = async (req, res) => {
   try {
     const { id } = req.params;
+    
+    console.log('📋 Getting payment intent:', id);
     
     const paymentIntent = await stripe.paymentIntents.retrieve(id);
     
